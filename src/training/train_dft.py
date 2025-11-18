@@ -29,6 +29,7 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 from src.data.datasets import DFTChiDataset, collate_dft_chi
 from src.data.featurization import PolymerFeaturizer
 from src.data.splits import create_dft_splits
+from src.evaluation.analysis import save_detailed_predictions
 from src.models.multitask_model import MultiTaskChiSolubilityModel
 from src.training.losses import chi_dft_loss, compute_metrics_regression
 from src.utils.config import Config, load_config, save_config
@@ -232,6 +233,7 @@ def validate(
     val_loader: DataLoader,
     config: Config,
     device: torch.device,
+    return_detailed: bool = False,
 ) -> Tuple[Dict[str, float], np.ndarray, np.ndarray]:
     """
     Validate model.
@@ -241,17 +243,31 @@ def validate(
         val_loader: Validation dataloader
         config: Configuration
         device: Device to use
+        return_detailed: If True, return additional data (A, B, T, SMILES)
 
     Returns:
-        metrics: Dictionary of validation metrics
-        predictions: Array of predictions
-        targets: Array of true values
+        If return_detailed=False:
+            metrics: Dictionary of validation metrics
+            predictions: Array of predictions
+            targets: Array of true values
+        If return_detailed=True:
+            metrics: Dictionary of validation metrics
+            predictions: Array of predictions
+            targets: Array of true values
+            temperatures: Array of temperatures
+            A_params: Array of A parameters
+            B_params: Array of B parameters
+            smiles_list: List of SMILES strings
     """
     model.eval()
 
     total_loss = 0.0
     all_preds = []
     all_targets = []
+    all_temps = []
+    all_A = []
+    all_B = []
+    all_smiles = []
 
     for batch in tqdm(val_loader, desc="Validating", leave=False):
         # Move batch to device
@@ -273,6 +289,12 @@ def validate(
         all_preds.append(chi_pred.cpu())
         all_targets.append(chi_true.cpu())
 
+        if return_detailed:
+            all_temps.append(temperature.cpu())
+            all_A.append(A.cpu())
+            all_B.append(B.cpu())
+            all_smiles.extend(batch["smiles"])
+
     # Compute metrics
     avg_loss = total_loss / len(val_loader)
     all_preds = torch.cat(all_preds)
@@ -281,7 +303,21 @@ def validate(
     metrics = compute_metrics_regression(all_preds, all_targets)
     metrics["loss"] = avg_loss
 
-    return metrics, all_preds.numpy(), all_targets.numpy()
+    if return_detailed:
+        all_temps = torch.cat(all_temps)
+        all_A = torch.cat(all_A)
+        all_B = torch.cat(all_B)
+        return (
+            metrics,
+            all_preds.numpy(),
+            all_targets.numpy(),
+            all_temps.numpy(),
+            all_A.numpy(),
+            all_B.numpy(),
+            all_smiles,
+        )
+    else:
+        return metrics, all_preds.numpy(), all_targets.numpy()
 
 
 def plot_parity(
@@ -301,7 +337,7 @@ def plot_parity(
         title: Plot title
         dpi: Figure DPI
     """
-    fig, ax = plt.subplots(figsize=(8, 8))
+    fig, ax = plt.subplots(figsize=(4.5, 4.5))
 
     # Scatter plot
     ax.scatter(targets, predictions, alpha=0.5, s=20, edgecolors='none')
@@ -316,7 +352,6 @@ def plot_parity(
     ax.set_ylabel("Predicted Chi", fontsize=12)
     ax.set_title(title, fontsize=14)
     ax.legend()
-    ax.grid(True, alpha=0.3)
 
     # Equal aspect ratio
     ax.set_aspect('equal', adjustable='box')
@@ -324,28 +359,6 @@ def plot_parity(
     plt.tight_layout()
     plt.savefig(save_path, dpi=dpi, bbox_inches='tight')
     plt.close()
-
-
-def save_predictions(
-    predictions: np.ndarray,
-    targets: np.ndarray,
-    save_path: Path,
-):
-    """
-    Save predictions to CSV.
-
-    Args:
-        predictions: Predicted values
-        targets: True values
-        save_path: Path to save CSV
-    """
-    df = pd.DataFrame({
-        "chi_true": targets,
-        "chi_pred": predictions,
-        "error": predictions - targets,
-        "abs_error": np.abs(predictions - targets),
-    })
-    df.to_csv(save_path, index=False)
 
 
 def main():
@@ -531,11 +544,20 @@ def main():
 
             logger.info(f"Saved best model to {checkpoint_path}")
 
-            # Save best predictions
-            save_predictions(
-                val_preds,
-                val_targets,
-                run_dir / "val_predictions_best.csv",
+            # Get detailed validation predictions for saving
+            _, val_preds_detailed, val_targets_detailed, val_temps, val_A, val_B, val_smiles = validate(
+                model, val_loader, config, device, return_detailed=True
+            )
+
+            # Save detailed best predictions with all metadata
+            save_detailed_predictions(
+                predictions=val_preds_detailed,
+                targets=val_targets_detailed,
+                save_path=run_dir / "val_predictions_best.csv",
+                smiles=val_smiles,
+                temperatures=val_temps,
+                A_params=val_A,
+                B_params=val_B,
             )
 
             # Plot parity
@@ -570,7 +592,9 @@ def main():
     checkpoint = torch.load(run_dir / "checkpoints" / "best_model.pt")
     model.load_state_dict(checkpoint["model_state_dict"])
 
-    test_metrics, test_preds, test_targets = validate(model, test_loader, config, device)
+    test_metrics, test_preds, test_targets, test_temps, test_A, test_B, test_smiles = validate(
+        model, test_loader, config, device, return_detailed=True
+    )
 
     logger.info(
         f"Test  - Loss: {test_metrics['loss']:.4f}, "
@@ -579,8 +603,16 @@ def main():
         f"R²: {test_metrics['r2']:.4f}"
     )
 
-    # Save test predictions and plot
-    save_predictions(test_preds, test_targets, run_dir / "test_predictions.csv")
+    # Save detailed test predictions with all metadata
+    save_detailed_predictions(
+        predictions=test_preds,
+        targets=test_targets,
+        save_path=run_dir / "test_predictions.csv",
+        smiles=test_smiles,
+        temperatures=test_temps,
+        A_params=test_A,
+        B_params=test_B,
+    )
 
     plot_parity(
         test_preds,
