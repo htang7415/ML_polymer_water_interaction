@@ -37,7 +37,21 @@ from src.data.datasets import (
 )
 from src.data.featurization import PolymerFeaturizer
 from src.data.splits import create_dft_splits, create_solubility_splits, create_exp_chi_splits
-from src.evaluation.analysis import save_detailed_predictions, save_classification_predictions
+from src.evaluation.analysis import (
+    save_detailed_predictions,
+    save_classification_predictions,
+    analyze_chi_solubility_relationship,
+    analyze_A_sign_distribution,
+)
+from src.evaluation.plots import (
+    plot_training_history,
+    plot_parity_with_temperature,
+    plot_residual_vs_temperature,
+    plot_calibration,
+    plot_confusion_matrix,
+    plot_chi_rt_vs_solubility,
+)
+from src.evaluation.metrics import compute_confusion_matrix
 from src.models.multitask_model import MultiTaskChiSolubilityModel
 from src.training.losses import (
     multitask_loss,
@@ -876,6 +890,124 @@ def main():
         threshold=config.solubility.decision_threshold,
     )
     logger.info(f"Solubility predictions saved to test_predictions_solubility.csv")
+
+    # Generate training history plots
+    logger.info("\nGenerating training history plots...")
+    try:
+        plot_training_history(
+            metrics_csv_path=run_dir / "metrics.csv",
+            save_path=run_dir / "figures" / "training_curves",
+            config=config,
+            title="Multi-task Training History",
+            is_multitask=True,
+        )
+        logger.info(f"Saved training curves to {run_dir / 'figures' / 'training_curves.png'}")
+    except Exception as e:
+        logger.error(f"Failed to generate training history plot: {e}")
+
+    # Generate additional diagnostic plots
+    logger.info("Generating diagnostic plots...")
+
+    # Solubility calibration plot
+    try:
+        plot_calibration(
+            y_true=sol_targets,
+            y_prob=sol_preds,
+            save_path=run_dir / "figures" / "test" / "calibration_solubility",
+            config=config,
+            title="Solubility Prediction Calibration (Test Set)",
+        )
+        logger.info(f"Saved calibration plot")
+    except Exception as e:
+        logger.error(f"Failed to generate calibration plot: {e}")
+
+    # Confusion matrix for solubility
+    try:
+        threshold = config.solubility.decision_threshold
+        cm, counts = compute_confusion_matrix(sol_targets, sol_preds, threshold=threshold)
+        plot_confusion_matrix(
+            cm=counts,
+            save_path=run_dir / "figures" / "test" / "confusion_matrix_solubility",
+            config=config,
+            title=f"Solubility Confusion Matrix (Test Set, threshold={threshold})",
+        )
+        logger.info(f"Saved confusion matrix")
+    except Exception as e:
+        logger.error(f"Failed to generate confusion matrix: {e}")
+
+    # Get detailed predictions with chi_RT for chi-solubility relationship analysis
+    logger.info("\nRunning chi-solubility relationship analysis...")
+    try:
+        # Compute chi_RT for test solubility data
+        model.eval()
+        with torch.no_grad():
+            chi_rt_list = []
+            sol_labels_list = []
+            for batch in test_loaders["sol"]:
+                x = batch["x"].to(device)
+                temp_rt = torch.full((x.size(0),), config.solubility.T_ref).to(device)
+                outputs = model(x, temperature=temp_rt)
+                chi_rt = outputs["chi"]
+                chi_rt_list.append(chi_rt.cpu().numpy())
+                sol_labels_list.append(batch["solubility"].cpu().numpy())
+
+            chi_rt_array = np.concatenate(chi_rt_list)
+            sol_labels_array = np.concatenate(sol_labels_list)
+
+        # Plot chi_RT distribution by solubility class
+        plot_chi_rt_vs_solubility(
+            chi_rt=chi_rt_array,
+            solubility_labels=sol_labels_array,
+            save_path=run_dir / "figures" / "analysis" / "chi_rt_vs_solubility",
+            config=config,
+            plot_type="box",
+            title=r"$\chi_{RT}$ Distribution by Solubility Class",
+        )
+        logger.info(f"Saved chi_RT vs solubility plot")
+
+        # Run chi-solubility relationship analysis
+        analysis_results = analyze_chi_solubility_relationship(
+            chi_rt=chi_rt_array,
+            solubility_labels=sol_labels_array,
+            T_ref=config.solubility.T_ref,
+        )
+
+        # Save analysis results
+        analysis_dir = run_dir / "analysis"
+        analysis_dir.mkdir(parents=True, exist_ok=True)
+        with open(analysis_dir / "chi_solubility_analysis.json", "w") as f:
+            json.dump(analysis_results, f, indent=2)
+        logger.info(f"Saved chi-solubility analysis to {analysis_dir / 'chi_solubility_analysis.json'}")
+
+    except Exception as e:
+        logger.error(f"Failed to run chi-solubility analysis: {e}")
+
+    # Analyze A-parameter distribution
+    logger.info("\nAnalyzing A-parameter distribution (UCST/LCST behavior)...")
+    try:
+        # Get A parameters for experimental chi test set
+        with torch.no_grad():
+            A_params_list = []
+            for batch in test_loaders["exp"]:
+                x = batch["x"].to(device)
+                temp = batch["temperature"].to(device)
+                outputs = model(x, temperature=temp)
+                A_params_list.append(outputs["A"].cpu().numpy())
+
+            A_params_array = np.concatenate(A_params_list)
+
+        # Analyze A-parameter distribution
+        A_analysis = analyze_A_sign_distribution(A_params_array)
+
+        # Save A-parameter analysis
+        with open(analysis_dir / "A_parameter_analysis.json", "w") as f:
+            json.dump(A_analysis, f, indent=2)
+        logger.info(f"Saved A-parameter analysis")
+        logger.info(f"  UCST (A>0): {A_analysis['n_positive']} ({A_analysis['percent_positive']:.1f}%)")
+        logger.info(f"  LCST (A<0): {A_analysis['n_negative']} ({A_analysis['percent_negative']:.1f}%)")
+
+    except Exception as e:
+        logger.error(f"Failed to analyze A-parameter distribution: {e}")
 
     # Save final summary
     summary = {

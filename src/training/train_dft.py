@@ -30,6 +30,11 @@ from src.data.datasets import DFTChiDataset, collate_dft_chi
 from src.data.featurization import PolymerFeaturizer
 from src.data.splits import create_dft_splits
 from src.evaluation.analysis import save_detailed_predictions
+from src.evaluation.plots import (
+    plot_training_history,
+    plot_parity_with_temperature,
+    plot_residual_vs_temperature,
+)
 from src.models.multitask_model import MultiTaskChiSolubilityModel
 from src.training.losses import chi_dft_loss, compute_metrics_regression
 from src.utils.config import Config, load_config, save_config
@@ -621,6 +626,51 @@ def main():
         title="DFT Chi Parity Plot (Test Set)",
         dpi=config.plotting.dpi,
     )
+
+    # Generate training history plots
+    logger.info("\nGenerating training history plots...")
+    try:
+        plot_training_history(
+            metrics_csv_path=run_dir / "metrics.csv",
+            save_path=run_dir / "figures" / "training_curves",
+            config=config,
+            title="DFT Training History",
+            is_multitask=False,
+        )
+        logger.info(f"Saved training curves to {run_dir / 'figures' / 'training_curves.png'}")
+    except Exception as e:
+        logger.error(f"Failed to generate training history plot: {e}")
+
+    # Generate additional diagnostic plots
+    logger.info("Generating diagnostic plots...")
+
+    # Temperature-colored parity plot for test set
+    try:
+        plot_parity_with_temperature(
+            y_true=test_targets,
+            y_pred=test_preds,
+            temperatures=test_temps,
+            save_path=run_dir / "figures" / "parity_plot_test_temperature",
+            config=config,
+            title="DFT Chi Parity Plot - Colored by Temperature (Test Set)",
+        )
+        logger.info(f"Saved temperature-colored parity plot")
+    except Exception as e:
+        logger.error(f"Failed to generate temperature-colored parity plot: {e}")
+
+    # Residual vs temperature plot
+    try:
+        plot_residual_vs_temperature(
+            y_true=test_targets,
+            y_pred=test_preds,
+            temperatures=test_temps,
+            save_path=run_dir / "figures" / "residual_vs_temperature_test",
+            config=config,
+            title="Residuals vs Temperature (Test Set)",
+        )
+        logger.info(f"Saved residual vs temperature plot")
+    except Exception as e:
+        logger.error(f"Failed to generate residual plot: {e}")
 
     # Save final summary
     summary = {
