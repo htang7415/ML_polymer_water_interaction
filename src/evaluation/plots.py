@@ -798,3 +798,275 @@ def plot_chi_rt_vs_solubility(
     _save_figure(fig, save_path, config)
 
     return fig
+
+
+def plot_training_history(
+    metrics_csv_path: Union[str, Path],
+    save_path: Union[str, Path],
+    config: Config,
+    title: str = "Training History",
+    is_multitask: bool = False,
+) -> plt.Figure:
+    """
+    Plot training and validation metrics over epochs from metrics CSV file.
+
+    Creates a multi-panel figure showing:
+    - Loss curves (train vs validation)
+    - MAE over epochs
+    - RMSE over epochs
+    - R² over epochs
+    - Learning rate schedule
+
+    For multi-task training, shows separate loss trajectories for each task.
+
+    Args:
+        metrics_csv_path: Path to metrics.csv file
+        save_path: Path to save figure (without extension)
+        config: Configuration object
+        title: Plot title
+        is_multitask: If True, plot multi-task specific metrics
+
+    Returns:
+        Matplotlib figure
+
+    Example:
+        >>> fig = plot_training_history(
+        ...     "results/experiment/metrics.csv",
+        ...     "results/experiment/figures/training_curves.png",
+        ...     config
+        ... )
+    """
+    import pandas as pd
+
+    _setup_plot_style(config)
+
+    # Read metrics CSV
+    try:
+        df = pd.read_csv(metrics_csv_path)
+    except Exception as e:
+        logger.error(f"Failed to read metrics CSV from {metrics_csv_path}: {e}")
+        fig, ax = plt.subplots(figsize=tuple(config.plotting.figure_size))
+        ax.text(
+            0.5, 0.5,
+            f"Failed to load metrics:\n{e}",
+            ha="center", va="center",
+            transform=ax.transAxes,
+        )
+        _save_figure(fig, save_path, config)
+        return fig
+
+    if len(df) == 0:
+        logger.warning("Metrics CSV is empty")
+        fig, ax = plt.subplots(figsize=tuple(config.plotting.figure_size))
+        ax.text(0.5, 0.5, "No training data", ha="center", va="center")
+        _save_figure(fig, save_path, config)
+        return fig
+
+    epochs = df["epoch"].values if "epoch" in df.columns else np.arange(len(df))
+
+    if is_multitask:
+        # Multi-task training: 4 rows x 2 cols
+        fig, axes = plt.subplots(4, 2, figsize=(14, 12))
+        fig.suptitle(title, fontsize=config.plotting.font_size + 2, y=0.995)
+
+        # Row 1: Combined loss + Individual task losses
+        ax = axes[0, 0]
+        if "train_loss" in df.columns:
+            ax.plot(epochs, df["train_loss"], label="Train Loss", linewidth=2)
+        if "val_loss" in df.columns:
+            ax.plot(epochs, df["val_loss"], label="Val Loss", linewidth=2)
+        ax.set_xlabel("Epoch")
+        ax.set_ylabel("Combined Loss")
+        ax.set_title("Combined Loss")
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+
+        # Individual task losses
+        ax = axes[0, 1]
+        task_losses = {
+            "DFT Chi": ("train_loss_dft", "val_loss_dft"),
+            "Exp Chi": ("train_loss_exp", "val_loss_exp"),
+            "Solubility": ("train_loss_sol", "val_loss_sol"),
+        }
+        for task_name, (train_col, val_col) in task_losses.items():
+            if train_col in df.columns and not df[train_col].isna().all():
+                ax.plot(epochs, df[train_col], label=f"{task_name} (train)",
+                       linestyle="--", alpha=0.7)
+            if val_col in df.columns and not df[val_col].isna().all():
+                ax.plot(epochs, df[val_col], label=f"{task_name} (val)", linewidth=2)
+        ax.set_xlabel("Epoch")
+        ax.set_ylabel("Task Loss")
+        ax.set_title("Individual Task Losses")
+        ax.legend(fontsize=config.plotting.font_size - 2)
+        ax.grid(True, alpha=0.3)
+
+        # Row 2: DFT Chi metrics
+        metrics_to_plot = [
+            ("val_dft_mae", "DFT Chi MAE", axes[1, 0]),
+            ("val_dft_rmse", "DFT Chi RMSE", axes[1, 1]),
+        ]
+        for col, ylabel, ax in metrics_to_plot:
+            if col in df.columns:
+                ax.plot(epochs, df[col], linewidth=2, color="C0")
+                ax.set_xlabel("Epoch")
+                ax.set_ylabel(ylabel)
+                ax.set_title(ylabel)
+                ax.grid(True, alpha=0.3)
+
+        # Row 3: Experimental Chi metrics
+        metrics_to_plot = [
+            ("val_exp_mae", "Exp Chi MAE", axes[2, 0]),
+            ("val_exp_rmse", "Exp Chi RMSE", axes[2, 1]),
+        ]
+        for col, ylabel, ax in metrics_to_plot:
+            if col in df.columns:
+                ax.plot(epochs, df[col], linewidth=2, color="C1")
+                ax.set_xlabel("Epoch")
+                ax.set_ylabel(ylabel)
+                ax.set_title(ylabel)
+                ax.grid(True, alpha=0.3)
+
+        # Row 4: Solubility metrics + Learning rate
+        ax = axes[3, 0]
+        sol_metrics = {
+            "Accuracy": "val_sol_accuracy",
+            "F1": "val_sol_f1",
+            "ROC-AUC": "val_sol_roc_auc",
+        }
+        for metric_name, col in sol_metrics.items():
+            if col in df.columns:
+                ax.plot(epochs, df[col], label=metric_name, linewidth=2)
+        ax.set_xlabel("Epoch")
+        ax.set_ylabel("Metric Value")
+        ax.set_title("Solubility Metrics")
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+        ax.set_ylim([0, 1.05])
+
+        # Learning rate
+        ax = axes[3, 1]
+        if "lr" in df.columns:
+            ax.plot(epochs, df["lr"], linewidth=2, color="C3")
+            ax.set_xlabel("Epoch")
+            ax.set_ylabel("Learning Rate")
+            ax.set_title("Learning Rate Schedule")
+            ax.set_yscale("log")
+            ax.grid(True, alpha=0.3)
+
+    else:
+        # Single-task training: 3 rows x 2 cols
+        fig, axes = plt.subplots(3, 2, figsize=(12, 10))
+        fig.suptitle(title, fontsize=config.plotting.font_size + 2, y=0.995)
+
+        # Row 1: Loss curves
+        ax = axes[0, 0]
+        if "train_loss" in df.columns:
+            ax.plot(epochs, df["train_loss"], label="Train Loss", linewidth=2)
+        if "val_loss" in df.columns:
+            ax.plot(epochs, df["val_loss"], label="Val Loss", linewidth=2)
+        ax.set_xlabel("Epoch")
+        ax.set_ylabel("Loss")
+        ax.set_title("Training and Validation Loss")
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+
+        # Row 1, Col 2: MAE
+        ax = axes[0, 1]
+        if "train_mae" in df.columns:
+            ax.plot(epochs, df["train_mae"], label="Train MAE", linewidth=2)
+        if "val_mae" in df.columns:
+            ax.plot(epochs, df["val_mae"], label="Val MAE", linewidth=2)
+        ax.set_xlabel("Epoch")
+        ax.set_ylabel("MAE")
+        ax.set_title("Mean Absolute Error")
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+
+        # Row 2: RMSE
+        ax = axes[1, 0]
+        if "train_rmse" in df.columns:
+            ax.plot(epochs, df["train_rmse"], label="Train RMSE", linewidth=2)
+        if "val_rmse" in df.columns:
+            ax.plot(epochs, df["val_rmse"], label="Val RMSE", linewidth=2)
+        ax.set_xlabel("Epoch")
+        ax.set_ylabel("RMSE")
+        ax.set_title("Root Mean Squared Error")
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+
+        # Row 2, Col 2: R²
+        ax = axes[1, 1]
+        if "train_r2" in df.columns:
+            ax.plot(epochs, df["train_r2"], label="Train R²", linewidth=2)
+        if "val_r2" in df.columns:
+            ax.plot(epochs, df["val_r2"], label="Val R²", linewidth=2)
+        ax.set_xlabel("Epoch")
+        ax.set_ylabel("R²")
+        ax.set_title("R² Score")
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+        ax.set_ylim([-0.1, 1.05])
+
+        # Row 3, Col 1: Learning rate
+        ax = axes[2, 0]
+        if "lr" in df.columns:
+            ax.plot(epochs, df["lr"], linewidth=2, color="C3")
+            ax.set_xlabel("Epoch")
+            ax.set_ylabel("Learning Rate")
+            ax.set_title("Learning Rate Schedule")
+            ax.set_yscale("log")
+            ax.grid(True, alpha=0.3)
+
+        # Row 3, Col 2: Summary stats
+        ax = axes[2, 1]
+        ax.axis("off")
+
+        # Create summary text
+        summary_lines = [
+            f"Total Epochs: {len(df)}",
+            "",
+        ]
+
+        if "val_loss" in df.columns:
+            best_epoch = df["val_loss"].idxmin()
+            best_loss = df["val_loss"].min()
+            summary_lines.extend([
+                f"Best Validation Loss:",
+                f"  Epoch {best_epoch}: {best_loss:.6f}",
+                "",
+            ])
+
+        if "val_mae" in df.columns:
+            best_epoch = df["val_mae"].idxmin()
+            best_mae = df["val_mae"].min()
+            summary_lines.extend([
+                f"Best Validation MAE:",
+                f"  Epoch {best_epoch}: {best_mae:.6f}",
+                "",
+            ])
+
+        if "val_r2" in df.columns:
+            best_epoch = df["val_r2"].idxmax()
+            best_r2 = df["val_r2"].max()
+            summary_lines.extend([
+                f"Best Validation R²:",
+                f"  Epoch {best_epoch}: {best_r2:.6f}",
+            ])
+
+        summary_text = "\n".join(summary_lines)
+        ax.text(
+            0.1, 0.9,
+            summary_text,
+            transform=ax.transAxes,
+            verticalalignment="top",
+            fontsize=config.plotting.font_size,
+            family="monospace",
+            bbox=dict(boxstyle="round", facecolor="lightgray", alpha=0.3),
+        )
+
+    plt.tight_layout()
+
+    # Save figure
+    _save_figure(fig, save_path, config)
+
+    return fig
