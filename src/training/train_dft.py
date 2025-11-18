@@ -434,7 +434,6 @@ def main():
                 mode='min',
                 factor=config.training.scheduler_factor,
                 patience=config.training.scheduler_patience,
-                verbose=True,
             )
         elif scheduler_type == "step":
             scheduler = torch.optim.lr_scheduler.StepLR(
