@@ -115,7 +115,6 @@ def train_fold(
             mode='min',
             factor=config.training.scheduler_factor,
             patience=config.training.scheduler_patience,
-            verbose=False,
         )
 
     # Training loop
