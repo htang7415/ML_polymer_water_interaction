@@ -160,7 +160,6 @@ def plot_parity(
     ax.set_ylabel(ylabel)
     ax.set_title(title)
     ax.legend()
-    ax.grid(True, alpha=0.3)
     ax.set_aspect("equal", adjustable="box")
 
     plt.tight_layout()
@@ -251,7 +250,6 @@ def plot_parity_with_temperature(
     ax.set_ylabel(ylabel)
     ax.set_title(title)
     ax.legend()
-    ax.grid(True, alpha=0.3)
     ax.set_aspect("equal", adjustable="box")
 
     plt.tight_layout()

@@ -555,3 +555,131 @@ def create_latex_table(
         logger.info(f"LaTeX table saved to {save_path}")
 
     return latex_str
+
+
+def save_detailed_predictions(
+    predictions: np.ndarray,
+    targets: np.ndarray,
+    save_path: Union[str, Path],
+    smiles: Optional[list] = None,
+    temperatures: Optional[np.ndarray] = None,
+    A_params: Optional[np.ndarray] = None,
+    B_params: Optional[np.ndarray] = None,
+    uncertainties: Optional[np.ndarray] = None,
+    fold_ids: Optional[np.ndarray] = None,
+    additional_data: Optional[Dict[str, np.ndarray]] = None,
+) -> None:
+    """
+    Save detailed predictions with all metadata to CSV.
+
+    Creates a comprehensive CSV file with predictions, errors,
+    and optional metadata like SMILES, temperature, model parameters.
+
+    Args:
+        predictions: Predicted values, shape (n_samples,)
+        targets: True values, shape (n_samples,)
+        save_path: Path to save CSV file
+        smiles: Optional list of SMILES strings
+        temperatures: Optional temperature values in Kelvin
+        A_params: Optional A parameter predictions
+        B_params: Optional B parameter predictions
+        uncertainties: Optional prediction uncertainties (std)
+        fold_ids: Optional fold identifiers for CV
+        additional_data: Optional dictionary of additional arrays to include
+
+    Example:
+        >>> save_detailed_predictions(
+        ...     chi_pred, chi_true, "results/predictions.csv",
+        ...     smiles=polymer_smiles, temperatures=T,
+        ...     A_params=A, B_params=B
+        ... )
+    """
+    save_path = Path(save_path)
+    save_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Build data dictionary
+    data = {
+        "true_value": targets,
+        "predicted_value": predictions,
+        "error": predictions - targets,
+        "abs_error": np.abs(predictions - targets),
+        "squared_error": (predictions - targets) ** 2,
+    }
+
+    # Add optional metadata
+    if smiles is not None:
+        data["smiles"] = smiles
+    if temperatures is not None:
+        data["temperature_K"] = temperatures
+    if A_params is not None:
+        data["A_parameter"] = A_params
+    if B_params is not None:
+        data["B_parameter"] = B_params
+    if uncertainties is not None:
+        data["uncertainty_std"] = uncertainties
+    if fold_ids is not None:
+        data["fold_id"] = fold_ids
+    if additional_data is not None:
+        data.update(additional_data)
+
+    # Create DataFrame and save
+    df = pd.DataFrame(data)
+    df.to_csv(save_path, index=False)
+    logger.info(f"Detailed predictions saved to {save_path} ({len(df)} samples)")
+
+
+def save_classification_predictions(
+    predictions_prob: np.ndarray,
+    targets: np.ndarray,
+    save_path: Union[str, Path],
+    smiles: Optional[list] = None,
+    threshold: float = 0.5,
+    fold_ids: Optional[np.ndarray] = None,
+    additional_data: Optional[Dict[str, np.ndarray]] = None,
+) -> None:
+    """
+    Save classification predictions with probabilities to CSV.
+
+    Args:
+        predictions_prob: Predicted probabilities, shape (n_samples,)
+        targets: True binary labels (0 or 1), shape (n_samples,)
+        save_path: Path to save CSV file
+        smiles: Optional list of SMILES strings
+        threshold: Decision threshold for binary classification
+        fold_ids: Optional fold identifiers for CV
+        additional_data: Optional dictionary of additional arrays to include
+
+    Example:
+        >>> save_classification_predictions(
+        ...     solubility_prob, solubility_true,
+        ...     "results/solubility_predictions.csv",
+        ...     smiles=polymer_smiles, threshold=0.5
+        ... )
+    """
+    save_path = Path(save_path)
+    save_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Apply threshold to get binary predictions
+    predictions_binary = (predictions_prob >= threshold).astype(int)
+
+    # Build data dictionary
+    data = {
+        "true_label": targets.astype(int),
+        "predicted_probability": predictions_prob,
+        "predicted_label": predictions_binary,
+        "correct": (predictions_binary == targets.astype(int)).astype(int),
+        "confidence": np.abs(predictions_prob - 0.5),
+    }
+
+    # Add optional metadata
+    if smiles is not None:
+        data["smiles"] = smiles
+    if fold_ids is not None:
+        data["fold_id"] = fold_ids
+    if additional_data is not None:
+        data.update(additional_data)
+
+    # Create DataFrame and save
+    df = pd.DataFrame(data)
+    df.to_csv(save_path, index=False)
+    logger.info(f"Classification predictions saved to {save_path} ({len(df)} samples)")

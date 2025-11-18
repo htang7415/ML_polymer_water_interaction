@@ -37,6 +37,7 @@ from src.data.datasets import (
 )
 from src.data.featurization import PolymerFeaturizer
 from src.data.splits import create_dft_splits, create_solubility_splits, create_exp_chi_splits
+from src.evaluation.analysis import save_detailed_predictions, save_classification_predictions
 from src.models.multitask_model import MultiTaskChiSolubilityModel
 from src.training.losses import (
     multitask_loss,
@@ -123,6 +124,9 @@ def load_and_prepare_data(
     sol_csv_path = Path(config.paths.solubility_csv)
     logger.info(f"Loading solubility data from: {sol_csv_path}")
     df_sol = pd.read_csv(sol_csv_path)
+    # Rename water_soluble to soluble for consistency
+    if "water_soluble" in df_sol.columns:
+        df_sol = df_sol.rename(columns={"water_soluble": "soluble"})
     all_smiles.update(df_sol["SMILES"].unique())
     logger.info(f"Solubility: {len(df_sol)} samples, {df_sol['SMILES'].nunique()} unique polymers")
 
@@ -541,7 +545,7 @@ def plot_multitask_results(
 
     # DFT chi parity plot
     dft_preds, dft_targets = predictions["dft"]
-    fig, ax = plt.subplots(figsize=(8, 8))
+    fig, ax = plt.subplots(figsize=(4.5, 4.5))
     ax.scatter(dft_targets, dft_preds, alpha=0.5, s=20, edgecolors='none')
     min_val = min(dft_targets.min(), dft_preds.min())
     max_val = max(dft_targets.max(), dft_preds.max())
@@ -550,7 +554,6 @@ def plot_multitask_results(
     ax.set_ylabel("Predicted Chi", fontsize=12)
     ax.set_title(f"{title_prefix} - DFT Chi", fontsize=14)
     ax.legend()
-    ax.grid(True, alpha=0.3)
     ax.set_aspect('equal', adjustable='box')
     plt.tight_layout()
     plt.savefig(save_dir / "parity_dft_chi.png", dpi=dpi, bbox_inches='tight')
@@ -558,7 +561,7 @@ def plot_multitask_results(
 
     # Exp chi parity plot
     exp_preds, exp_targets = predictions["exp"]
-    fig, ax = plt.subplots(figsize=(8, 8))
+    fig, ax = plt.subplots(figsize=(4.5, 4.5))
     ax.scatter(exp_targets, exp_preds, alpha=0.5, s=20, edgecolors='none')
     min_val = min(exp_targets.min(), exp_preds.min())
     max_val = max(exp_targets.max(), exp_preds.max())
@@ -567,7 +570,6 @@ def plot_multitask_results(
     ax.set_ylabel("Predicted Chi", fontsize=12)
     ax.set_title(f"{title_prefix} - Experimental Chi", fontsize=14)
     ax.legend()
-    ax.grid(True, alpha=0.3)
     ax.set_aspect('equal', adjustable='box')
     plt.tight_layout()
     plt.savefig(save_dir / "parity_exp_chi.png", dpi=dpi, bbox_inches='tight')
@@ -581,14 +583,13 @@ def plot_multitask_results(
         fpr, tpr, _ = roc_curve(sol_targets, sol_preds)
         roc_auc = auc(fpr, tpr)
 
-        fig, ax = plt.subplots(figsize=(8, 8))
+        fig, ax = plt.subplots(figsize=(4.5, 4.5))
         ax.plot(fpr, tpr, lw=2, label=f'ROC curve (AUC = {roc_auc:.3f})')
         ax.plot([0, 1], [0, 1], 'k--', lw=2, label='Random')
         ax.set_xlabel("False Positive Rate", fontsize=12)
         ax.set_ylabel("True Positive Rate", fontsize=12)
         ax.set_title(f"{title_prefix} - Solubility ROC", fontsize=14)
         ax.legend()
-        ax.grid(True, alpha=0.3)
         plt.tight_layout()
         plt.savefig(save_dir / "roc_solubility.png", dpi=dpi, bbox_inches='tight')
         plt.close()
@@ -840,6 +841,41 @@ def main():
         title_prefix="Test Set",
         dpi=config.plotting.dpi,
     )
+
+    # Save detailed predictions to CSV
+    # DFT chi predictions
+    dft_preds, dft_targets = test_predictions["dft"]
+    df_dft = pd.DataFrame({
+        "true_value": dft_targets,
+        "predicted_value": dft_preds,
+        "error": dft_preds - dft_targets,
+        "abs_error": np.abs(dft_preds - dft_targets),
+        "squared_error": (dft_preds - dft_targets) ** 2,
+    })
+    df_dft.to_csv(run_dir / "test_predictions_dft_chi.csv", index=False)
+    logger.info(f"DFT chi predictions saved to test_predictions_dft_chi.csv")
+
+    # Experimental chi predictions
+    exp_preds, exp_targets = test_predictions["exp"]
+    df_exp = pd.DataFrame({
+        "true_value": exp_targets,
+        "predicted_value": exp_preds,
+        "error": exp_preds - exp_targets,
+        "abs_error": np.abs(exp_preds - exp_targets),
+        "squared_error": (exp_preds - exp_targets) ** 2,
+    })
+    df_exp.to_csv(run_dir / "test_predictions_exp_chi.csv", index=False)
+    logger.info(f"Experimental chi predictions saved to test_predictions_exp_chi.csv")
+
+    # Solubility predictions
+    sol_preds, sol_targets = test_predictions["sol"]
+    save_classification_predictions(
+        predictions_prob=sol_preds,
+        targets=sol_targets,
+        save_path=run_dir / "test_predictions_solubility.csv",
+        threshold=config.solubility.decision_threshold,
+    )
+    logger.info(f"Solubility predictions saved to test_predictions_solubility.csv")
 
     # Save final summary
     summary = {

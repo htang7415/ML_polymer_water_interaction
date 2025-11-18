@@ -29,6 +29,7 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 from src.data.datasets import ExpChiDataset, collate_exp_chi
 from src.data.featurization import PolymerFeaturizer
 from src.data.splits import create_exp_chi_cv_splits
+from src.evaluation.analysis import save_detailed_predictions
 from src.models.multitask_model import MultiTaskChiSolubilityModel
 from src.training.losses import chi_exp_loss, compute_metrics_regression
 from src.utils.config import Config, load_config, save_config
@@ -361,15 +362,17 @@ def main():
         fold_dir = run_dir / f"fold_{fold_idx + 1}"
         fold_dir.mkdir(parents=True, exist_ok=True)
 
-        pd.DataFrame({
-            "chi_true": best_val_targets,
-            "chi_pred": best_val_preds,
-            "error": best_val_preds - best_val_targets,
-            "abs_error": np.abs(best_val_preds - best_val_targets),
-        }).to_csv(fold_dir / "predictions.csv", index=False)
+        # Save detailed predictions with fold information
+        fold_ids = np.full(len(best_val_targets), fold_idx + 1)
+        save_detailed_predictions(
+            predictions=best_val_preds,
+            targets=best_val_targets,
+            save_path=fold_dir / "predictions.csv",
+            fold_ids=fold_ids,
+        )
 
         # Plot parity for this fold
-        fig, ax = plt.subplots(figsize=(8, 8))
+        fig, ax = plt.subplots(figsize=(4.5, 4.5))
         ax.scatter(best_val_targets, best_val_preds, alpha=0.5, s=20, edgecolors='none')
         min_val = min(best_val_targets.min(), best_val_preds.min())
         max_val = max(best_val_targets.max(), best_val_preds.max())
@@ -378,7 +381,6 @@ def main():
         ax.set_ylabel("Predicted Chi", fontsize=12)
         ax.set_title(f"Fold {fold_idx + 1} - Experimental Chi (MAE={best_val_metrics['mae']:.4f})", fontsize=14)
         ax.legend()
-        ax.grid(True, alpha=0.3)
         ax.set_aspect('equal', adjustable='box')
         plt.tight_layout()
         plt.savefig(fold_dir / "parity_plot.png", dpi=config.plotting.dpi, bbox_inches='tight')
@@ -432,7 +434,7 @@ def main():
     all_fold_preds = np.concatenate(all_fold_preds)
     all_fold_targets = np.concatenate(all_fold_targets)
 
-    fig, ax = plt.subplots(figsize=(8, 8))
+    fig, ax = plt.subplots(figsize=(4.5, 4.5))
     ax.scatter(all_fold_targets, all_fold_preds, alpha=0.5, s=20, edgecolors='none')
     min_val = min(all_fold_targets.min(), all_fold_preds.min())
     max_val = max(all_fold_targets.max(), all_fold_preds.max())
@@ -444,7 +446,6 @@ def main():
         fontsize=14
     )
     ax.legend()
-    ax.grid(True, alpha=0.3)
     ax.set_aspect('equal', adjustable='box')
     plt.tight_layout()
     plt.savefig(run_dir / "parity_plot_all_folds.png", dpi=config.plotting.dpi, bbox_inches='tight')

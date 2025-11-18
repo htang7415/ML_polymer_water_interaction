@@ -237,7 +237,7 @@ plotting:
 
   # Style
   style: "seaborn-v0_8-paper"  # matplotlib style
-  figure_size: [8, 6]  # [width, height] in inches
+  figure_size: [4.5, 4.5]  # [width, height] in inches
   font_size: 12
 
   # Color schemes
