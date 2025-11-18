@@ -1,0 +1,59 @@
+# Python
+# Data files (processed data should not be in version control)
+data/processed/
+results/
+Data/
+
+Pineline.md
+IMPLEMENTATION_SUMMARY.md
+QUICK_START.md
+prompt.md
+pyproject.toml
+
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Model checkpoints and large files
+*.pkl
+*.pth
+*.pt
+*.h5
+*.hdf5
+
+# Logs
+*.log
