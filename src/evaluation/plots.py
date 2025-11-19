@@ -132,7 +132,6 @@ def plot_parity(
         [min_val, max_val],
         "k--",
         linewidth=1.5,
-        label="y=x",
         zorder=10,
     )
 
@@ -142,9 +141,7 @@ def plot_parity(
         metrics_text = (
             f"MAE = {metrics['mae']:.4f}\n"
             f"RMSE = {metrics['rmse']:.4f}\n"
-            f"R² = {metrics['r2']:.4f}\n"
-            f"Spearman r = {metrics['spearman_r']:.4f}\n"
-            f"n = {metrics['n_samples']}"
+            f"R² = {metrics['r2']:.4f}"
         )
         ax.text(
             0.05,
@@ -159,7 +156,6 @@ def plot_parity(
     ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel)
     ax.set_title(title)
-    ax.legend()
     ax.set_aspect("equal", adjustable="box")
 
     plt.tight_layout()
@@ -242,14 +238,29 @@ def plot_parity_with_temperature(
         [min_val, max_val],
         "k--",
         linewidth=1.5,
-        label="y=x",
         zorder=10,
+    )
+
+    # Add metrics annotation
+    metrics = compute_regression_metrics(y_true_valid, y_pred_valid)
+    metrics_text = (
+        f"MAE = {metrics['mae']:.4f}\n"
+        f"RMSE = {metrics['rmse']:.4f}\n"
+        f"R² = {metrics['r2']:.4f}"
+    )
+    ax.text(
+        0.05,
+        0.95,
+        metrics_text,
+        transform=ax.transAxes,
+        verticalalignment="top",
+        bbox=dict(boxstyle="round", facecolor="white", alpha=0.8),
+        fontsize=config.plotting.font_size - 1,
     )
 
     ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel)
     ax.set_title(title)
-    ax.legend()
     ax.set_aspect("equal", adjustable="box")
 
     plt.tight_layout()
@@ -650,10 +661,13 @@ def plot_confusion_matrix(
     )
 
     # Plot heatmap
+    # Determine format based on dtype (use integer format for counts, float for normalized)
+    fmt = ".0f" if np.issubdtype(cm.dtype, np.integer) else ".2f"
+
     sns.heatmap(
         cm,
         annot=True,
-        fmt=".0f" if cm.dtype == int else ".2f",
+        fmt=fmt,
         cmap=cmap,
         xticklabels=labels,
         yticklabels=labels,
@@ -1180,23 +1194,17 @@ def plot_parity_with_uncertainty(
         [min_val, max_val],
         "k--",
         linewidth=1.5,
-        label="y=x",
         zorder=10,
     )
 
     # Add metrics annotation
     if show_metrics:
         metrics = compute_regression_metrics(y_pred_valid, y_true_valid)
-        mean_uncertainty = np.mean(y_std_valid)
-        median_uncertainty = np.median(y_std_valid)
 
         metrics_text = (
             f"MAE = {metrics['mae']:.4f}\n"
             f"RMSE = {metrics['rmse']:.4f}\n"
-            f"R² = {metrics['r2']:.4f}\n"
-            f"Mean σ = {mean_uncertainty:.4f}\n"
-            f"Median σ = {median_uncertainty:.4f}\n"
-            f"n = {metrics['n_samples']}"
+            f"R² = {metrics['r2']:.4f}"
         )
         ax.text(
             0.05,
@@ -1211,7 +1219,11 @@ def plot_parity_with_uncertainty(
     ax.set_xlabel(xlabel)
     ax.set_ylabel(ylabel)
     ax.set_title(title)
-    ax.legend()
+
+    # Only show legend if there are labeled items (e.g., error bars mode)
+    if use_error_bars and not use_color:
+        ax.legend()
+
     ax.set_aspect("equal", adjustable="box")
 
     plt.tight_layout()
