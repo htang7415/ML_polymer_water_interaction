@@ -1070,3 +1070,350 @@ def plot_training_history(
     _save_figure(fig, save_path, config)
 
     return fig
+
+
+def plot_parity_with_uncertainty(
+    y_true: np.ndarray,
+    y_pred_mean: np.ndarray,
+    y_pred_std: np.ndarray,
+    save_path: Union[str, Path],
+    config: Config,
+    title: str = "Parity Plot with Uncertainty",
+    xlabel: str = r"$\chi$ (True)",
+    ylabel: str = r"$\chi$ (Predicted)",
+    show_metrics: bool = True,
+    error_bar_type: str = "bars",
+    n_sigma: float = 2.0,
+    max_points_for_bars: int = 500,
+) -> plt.Figure:
+    """
+    Create parity plot with MC dropout uncertainty visualization.
+
+    Args:
+        y_true: True values, shape (n_samples,)
+        y_pred_mean: Predicted mean values (MC dropout), shape (n_samples,)
+        y_pred_std: Predicted standard deviation (MC dropout), shape (n_samples,)
+        save_path: Path to save figure (without extension)
+        config: Configuration object
+        title: Plot title
+        xlabel: X-axis label
+        ylabel: Y-axis label
+        show_metrics: If True, annotate plot with metrics
+        error_bar_type: How to show uncertainty - "bars", "color", or "both"
+        n_sigma: Number of standard deviations for error bars (default: 2)
+        max_points_for_bars: If more points, switch to color-coding only
+
+    Returns:
+        Matplotlib figure
+
+    Example:
+        >>> fig = plot_parity_with_uncertainty(
+        ...     y_true, y_pred_mean, y_pred_std, save_path, config, n_sigma=2
+        ... )
+    """
+    _setup_plot_style(config)
+
+    # Create figure
+    fig, ax = plt.subplots(figsize=tuple(config.plotting.figure_size))
+
+    # Filter NaN values
+    valid_mask = ~(np.isnan(y_true) | np.isnan(y_pred_mean) | np.isnan(y_pred_std))
+    y_true_valid = y_true[valid_mask]
+    y_pred_valid = y_pred_mean[valid_mask]
+    y_std_valid = y_pred_std[valid_mask]
+
+    if len(y_true_valid) == 0:
+        logger.warning("No valid data to plot in uncertainty parity plot")
+        plt.close(fig)
+        return fig
+
+    # Decide visualization method based on number of points
+    use_error_bars = len(y_true_valid) <= max_points_for_bars and error_bar_type in ["bars", "both"]
+    use_color = error_bar_type in ["color", "both"]
+
+    # Plot based on method
+    if use_color:
+        # Color-code points by uncertainty
+        scatter = ax.scatter(
+            y_true_valid,
+            y_pred_valid,
+            c=y_std_valid,
+            cmap="YlOrRd",  # Yellow to Red (low to high uncertainty)
+            alpha=0.6,
+            s=30,
+            edgecolors="none",
+        )
+        cbar = plt.colorbar(scatter, ax=ax)
+        cbar.set_label(f"Prediction Uncertainty (σ)", rotation=270, labelpad=20)
+
+        if use_error_bars:
+            # Add transparent error bars on top
+            ax.errorbar(
+                y_true_valid,
+                y_pred_valid,
+                yerr=n_sigma * y_std_valid,
+                fmt="none",
+                ecolor="gray",
+                alpha=0.2,
+                capsize=0,
+            )
+    else:
+        # Just error bars, no color coding
+        ax.errorbar(
+            y_true_valid,
+            y_pred_valid,
+            yerr=n_sigma * y_std_valid,
+            fmt="o",
+            markersize=4,
+            alpha=0.5,
+            ecolor="gray",
+            elinewidth=1,
+            capsize=2,
+            label=f"Predictions (±{n_sigma}σ)",
+        )
+
+    # y=x reference line
+    min_val = min(y_true_valid.min(), y_pred_valid.min())
+    max_val = max(y_true_valid.max(), y_pred_valid.max())
+    ax.plot(
+        [min_val, max_val],
+        [min_val, max_val],
+        "k--",
+        linewidth=1.5,
+        label="y=x",
+        zorder=10,
+    )
+
+    # Add metrics annotation
+    if show_metrics:
+        metrics = compute_regression_metrics(y_pred_valid, y_true_valid)
+        mean_uncertainty = np.mean(y_std_valid)
+        median_uncertainty = np.median(y_std_valid)
+
+        metrics_text = (
+            f"MAE = {metrics['mae']:.4f}\n"
+            f"RMSE = {metrics['rmse']:.4f}\n"
+            f"R² = {metrics['r2']:.4f}\n"
+            f"Mean σ = {mean_uncertainty:.4f}\n"
+            f"Median σ = {median_uncertainty:.4f}\n"
+            f"n = {metrics['n_samples']}"
+        )
+        ax.text(
+            0.05,
+            0.95,
+            metrics_text,
+            transform=ax.transAxes,
+            verticalalignment="top",
+            bbox=dict(boxstyle="round", facecolor="white", alpha=0.8),
+            fontsize=config.plotting.font_size - 1,
+        )
+
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+    ax.set_title(title)
+    ax.legend()
+    ax.set_aspect("equal", adjustable="box")
+
+    plt.tight_layout()
+
+    # Save figure
+    _save_figure(fig, save_path, config)
+
+    return fig
+
+
+def plot_error_vs_uncertainty(
+    y_true: np.ndarray,
+    y_pred_mean: np.ndarray,
+    y_pred_std: np.ndarray,
+    save_path: Union[str, Path],
+    config: Config,
+    title: str = "Prediction Error vs Uncertainty",
+) -> plt.Figure:
+    """
+    Plot absolute error vs predicted uncertainty to check calibration.
+
+    Well-calibrated uncertainty: high uncertainty → high error.
+
+    Args:
+        y_true: True values, shape (n_samples,)
+        y_pred_mean: Predicted mean values, shape (n_samples,)
+        y_pred_std: Predicted standard deviation, shape (n_samples,)
+        save_path: Path to save figure (without extension)
+        config: Configuration object
+        title: Plot title
+
+    Returns:
+        Matplotlib figure
+    """
+    _setup_plot_style(config)
+
+    # Create figure
+    fig, ax = plt.subplots(figsize=tuple(config.plotting.figure_size))
+
+    # Filter NaN values
+    valid_mask = ~(np.isnan(y_true) | np.isnan(y_pred_mean) | np.isnan(y_pred_std))
+    y_true_valid = y_true[valid_mask]
+    y_pred_valid = y_pred_mean[valid_mask]
+    y_std_valid = y_pred_std[valid_mask]
+
+    if len(y_true_valid) == 0:
+        logger.warning("No valid data for error vs uncertainty plot")
+        plt.close(fig)
+        return fig
+
+    # Compute absolute errors
+    abs_errors = np.abs(y_pred_valid - y_true_valid)
+
+    # Scatter plot
+    ax.scatter(
+        y_std_valid,
+        abs_errors,
+        alpha=0.5,
+        s=30,
+        edgecolors="none",
+    )
+
+    # Add correlation line
+    try:
+        from scipy import stats
+        slope, intercept, r_value, p_value, std_err = stats.linregress(y_std_valid, abs_errors)
+
+        x_line = np.array([y_std_valid.min(), y_std_valid.max()])
+        y_line = slope * x_line + intercept
+
+        ax.plot(
+            x_line,
+            y_line,
+            "r--",
+            linewidth=2,
+            label=f"Linear fit (r={r_value:.3f}, p={p_value:.3e})",
+        )
+
+        # Add reference lines for perfect calibration
+        # For normally distributed errors: |error| ≈ σ on average
+        ax.plot(x_line, x_line, "g--", linewidth=1.5, alpha=0.7, label="Perfect calibration (|error|=σ)")
+        ax.plot(x_line, 2*x_line, "g:", linewidth=1.5, alpha=0.5, label="2σ calibration")
+
+        ax.legend()
+    except ImportError:
+        pass
+
+    ax.set_xlabel("Predicted Uncertainty (σ)", fontsize=12)
+    ax.set_ylabel("Absolute Prediction Error", fontsize=12)
+    ax.set_title(title, fontsize=14)
+    ax.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+
+    # Save figure
+    _save_figure(fig, save_path, config)
+
+    return fig
+
+
+def plot_uncertainty_calibration(
+    y_true: np.ndarray,
+    y_pred_mean: np.ndarray,
+    y_pred_std: np.ndarray,
+    save_path: Union[str, Path],
+    config: Config,
+    n_bins: int = 10,
+    title: str = "Uncertainty Calibration",
+) -> plt.Figure:
+    """
+    Plot calibration curve for uncertainty estimates.
+
+    Bins predictions by uncertainty and checks if errors match predicted uncertainty.
+
+    Args:
+        y_true: True values, shape (n_samples,)
+        y_pred_mean: Predicted mean values, shape (n_samples,)
+        y_pred_std: Predicted standard deviation, shape (n_samples,)
+        save_path: Path to save figure (without extension)
+        config: Configuration object
+        n_bins: Number of uncertainty bins
+        title: Plot title
+
+    Returns:
+        Matplotlib figure
+    """
+    _setup_plot_style(config)
+
+    # Create figure
+    fig, ax = plt.subplots(figsize=tuple(config.plotting.figure_size))
+
+    # Filter NaN values
+    valid_mask = ~(np.isnan(y_true) | np.isnan(y_pred_mean) | np.isnan(y_pred_std))
+    y_true_valid = y_true[valid_mask]
+    y_pred_valid = y_pred_mean[valid_mask]
+    y_std_valid = y_pred_std[valid_mask]
+
+    if len(y_true_valid) == 0:
+        logger.warning("No valid data for calibration plot")
+        plt.close(fig)
+        return fig
+
+    # Compute absolute errors
+    abs_errors = np.abs(y_pred_valid - y_true_valid)
+
+    # Bin by predicted uncertainty
+    bin_edges = np.percentile(y_std_valid, np.linspace(0, 100, n_bins + 1))
+    bin_edges[0] = y_std_valid.min() - 1e-10  # Ensure all points included
+    bin_edges[-1] = y_std_valid.max() + 1e-10
+
+    bin_indices = np.digitize(y_std_valid, bin_edges) - 1
+    bin_indices = np.clip(bin_indices, 0, n_bins - 1)
+
+    # Compute statistics per bin
+    mean_predicted_unc = []
+    mean_actual_error = []
+    bin_counts = []
+
+    for bin_idx in range(n_bins):
+        mask = bin_indices == bin_idx
+        if np.sum(mask) > 0:
+            mean_predicted_unc.append(np.mean(y_std_valid[mask]))
+            mean_actual_error.append(np.mean(abs_errors[mask]))
+            bin_counts.append(np.sum(mask))
+
+    mean_predicted_unc = np.array(mean_predicted_unc)
+    mean_actual_error = np.array(mean_actual_error)
+
+    # Plot calibration curve
+    ax.plot(
+        mean_predicted_unc,
+        mean_actual_error,
+        "o-",
+        linewidth=2,
+        markersize=8,
+        label="Observed calibration",
+    )
+
+    # Perfect calibration line
+    max_val = max(mean_predicted_unc.max(), mean_actual_error.max())
+    ax.plot([0, max_val], [0, max_val], "k--", linewidth=1.5, label="Perfect calibration")
+
+    # Add bin counts as text
+    for i, (unc, err, count) in enumerate(zip(mean_predicted_unc, mean_actual_error, bin_counts)):
+        ax.annotate(
+            f"n={count}",
+            (unc, err),
+            xytext=(5, 5),
+            textcoords="offset points",
+            fontsize=8,
+            alpha=0.7,
+        )
+
+    ax.set_xlabel("Mean Predicted Uncertainty (σ)", fontsize=12)
+    ax.set_ylabel("Mean Absolute Error", fontsize=12)
+    ax.set_title(title, fontsize=14)
+    ax.legend()
+    ax.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+
+    # Save figure
+    _save_figure(fig, save_path, config)
+
+    return fig

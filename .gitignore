@@ -9,6 +9,7 @@ IMPLEMENTATION_SUMMARY.md
 QUICK_START.md
 prompt.md
 pyproject.toml
+RESULTS_GUIDE.md
 
 __pycache__/
 *.py[cod]

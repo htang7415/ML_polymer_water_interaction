@@ -616,7 +616,21 @@ def save_detailed_predictions(
     if B_params is not None:
         data["B_parameter"] = B_params
     if uncertainties is not None:
+        # Save uncertainty statistics
         data["uncertainty_std"] = uncertainties
+        data["uncertainty_lower_2sigma"] = predictions - 2 * uncertainties
+        data["uncertainty_upper_2sigma"] = predictions + 2 * uncertainties
+        data["uncertainty_lower_1sigma"] = predictions - uncertainties
+        data["uncertainty_upper_1sigma"] = predictions + uncertainties
+
+        # Calibration flags
+        abs_errors = np.abs(predictions - targets)
+        data["within_1sigma"] = (abs_errors <= uncertainties).astype(int)
+        data["within_2sigma"] = (abs_errors <= 2 * uncertainties).astype(int)
+
+        # High uncertainty flag (>75th percentile)
+        uncertainty_threshold = np.percentile(uncertainties, 75)
+        data["is_high_uncertainty"] = (uncertainties > uncertainty_threshold).astype(int)
     if fold_ids is not None:
         data["fold_id"] = fold_ids
     if additional_data is not None:
