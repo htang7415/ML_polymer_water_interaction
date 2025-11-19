@@ -33,8 +33,12 @@ from src.evaluation.analysis import save_detailed_predictions
 from src.evaluation.plots import (
     plot_training_history,
     plot_parity_with_temperature,
+    plot_parity_with_uncertainty,
     plot_residual_vs_temperature,
+    plot_error_vs_uncertainty,
+    plot_uncertainty_calibration,
 )
+from src.evaluation.uncertainty import mc_predict_batch, enable_mc_dropout
 from src.models.multitask_model import MultiTaskChiSolubilityModel
 from src.training.losses import chi_dft_loss, compute_metrics_regression
 from src.utils.config import Config, load_config, save_config
@@ -549,30 +553,52 @@ def main():
 
             logger.info(f"Saved best model to {checkpoint_path}")
 
-            # Get detailed validation predictions for saving
-            _, val_preds_detailed, val_targets_detailed, val_temps, val_A, val_B, val_smiles = validate(
-                model, val_loader, config, device, return_detailed=True
+            # Get detailed validation predictions with MC dropout uncertainty
+            logger.info("Computing validation predictions with MC dropout uncertainty...")
+            enable_mc_dropout(model)
+            mc_results = mc_predict_batch(
+                model=model,
+                dataloader=val_loader,
+                T_ref=config.data.reference_temperature,
+                n_samples=config.uncertainty.mc_dropout_samples,
+                device=device,
+                predict_solubility=False,
             )
+            model.train()  # Restore training mode
 
-            # Save detailed best predictions with all metadata
+            val_preds_mean = mc_results["chi_mean"]
+            val_preds_std = mc_results["chi_std"]
+            val_targets_detailed = mc_results["chi_true"]
+            val_temps = mc_results["temperatures"]
+            val_A_mean = mc_results["A_mean"]
+            val_B_mean = mc_results["B_mean"]
+            val_smiles = mc_results["smiles"]
+
+            # Save detailed best predictions with uncertainty
             save_detailed_predictions(
-                predictions=val_preds_detailed,
+                predictions=val_preds_mean,
                 targets=val_targets_detailed,
                 save_path=run_dir / "val_predictions_best.csv",
                 smiles=val_smiles,
                 temperatures=val_temps,
-                A_params=val_A,
-                B_params=val_B,
+                A_params=val_A_mean,
+                B_params=val_B_mean,
+                uncertainties=val_preds_std,
             )
 
-            # Plot parity
-            plot_parity(
-                val_preds,
-                val_targets,
-                run_dir / "figures" / "parity_plot_best.png",
-                title=f"DFT Chi Parity Plot (Epoch {epoch})",
-                dpi=config.plotting.dpi,
-            )
+            # Plot parity with uncertainty
+            try:
+                plot_parity_with_uncertainty(
+                    y_true=val_targets_detailed,
+                    y_pred_mean=val_preds_mean,
+                    y_pred_std=val_preds_std,
+                    save_path=run_dir / "figures" / "parity_plot_best",
+                    config=config,
+                    title=f"DFT Chi Parity Plot with Uncertainty (Epoch {epoch})",
+                    error_bar_type="color",  # Use color-coding for potentially many points
+                )
+            except Exception as e:
+                logger.warning(f"Failed to generate uncertainty parity plot: {e}")
 
         else:
             patience_counter += 1
@@ -592,13 +618,29 @@ def main():
     logger.info(f"Best epoch: {best_epoch}")
     logger.info(f"Best validation loss: {best_val_loss:.4f}")
 
-    # Load best model and evaluate on test set
+    # Save final model (last epoch)
+    final_checkpoint_path = run_dir / "checkpoints" / "final_model.pt"
+    final_checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+
+    torch.save({
+        "epoch": epoch,
+        "model_state_dict": model.state_dict(),
+        "optimizer_state_dict": optimizer.state_dict(),
+        "val_loss": val_metrics["loss"],
+        "val_mae": val_metrics["mae"],
+        "config": config.to_dict(),
+    }, final_checkpoint_path)
+
+    logger.info(f"Saved final model (epoch {epoch}) to {final_checkpoint_path}")
+
+    # Load best model and evaluate on test set with MC dropout
     logger.info("\nEvaluating on test set...")
     checkpoint = torch.load(run_dir / "checkpoints" / "best_model.pt")
     model.load_state_dict(checkpoint["model_state_dict"])
 
-    test_metrics, test_preds, test_targets, test_temps, test_A, test_B, test_smiles = validate(
-        model, test_loader, config, device, return_detailed=True
+    # Get basic metrics for logging
+    test_metrics, _, _ = validate(
+        model, test_loader, config, device, return_detailed=False
     )
 
     logger.info(
@@ -608,7 +650,27 @@ def main():
         f"R²: {test_metrics['r2']:.4f}"
     )
 
-    # Save detailed test predictions with all metadata
+    # Get detailed test predictions with MC dropout uncertainty
+    logger.info("Computing test predictions with MC dropout uncertainty...")
+    enable_mc_dropout(model)
+    test_mc_results = mc_predict_batch(
+        model=model,
+        dataloader=test_loader,
+        T_ref=config.data.reference_temperature,
+        n_samples=config.uncertainty.mc_dropout_samples,
+        device=device,
+        predict_solubility=False,
+    )
+
+    test_preds = test_mc_results["chi_mean"]
+    test_preds_std = test_mc_results["chi_std"]
+    test_targets = test_mc_results["chi_true"]
+    test_temps = test_mc_results["temperatures"]
+    test_A = test_mc_results["A_mean"]
+    test_B = test_mc_results["B_mean"]
+    test_smiles = test_mc_results["smiles"]
+
+    # Save detailed test predictions with uncertainty
     save_detailed_predictions(
         predictions=test_preds,
         targets=test_targets,
@@ -617,15 +679,49 @@ def main():
         temperatures=test_temps,
         A_params=test_A,
         B_params=test_B,
+        uncertainties=test_preds_std,
     )
 
-    plot_parity(
-        test_preds,
-        test_targets,
-        run_dir / "figures" / "parity_plot_test.png",
-        title="DFT Chi Parity Plot (Test Set)",
-        dpi=config.plotting.dpi,
-    )
+    # Plot parity with uncertainty
+    logger.info("Generating uncertainty-aware parity plots...")
+    try:
+        plot_parity_with_uncertainty(
+            y_true=test_targets,
+            y_pred_mean=test_preds,
+            y_pred_std=test_preds_std,
+            save_path=run_dir / "figures" / "parity_with_uncertainty_test",
+            config=config,
+            title="DFT Chi Parity Plot with Uncertainty (Test Set)",
+            error_bar_type="color",  # Use color-coding for many points
+        )
+        logger.info("Saved uncertainty parity plot")
+    except Exception as e:
+        logger.error(f"Failed to generate uncertainty parity plot: {e}")
+
+    # Plot uncertainty calibration
+    try:
+        plot_error_vs_uncertainty(
+            y_true=test_targets,
+            y_pred_mean=test_preds,
+            y_pred_std=test_preds_std,
+            save_path=run_dir / "figures" / "error_vs_uncertainty_test",
+            config=config,
+        )
+        logger.info("Saved error vs uncertainty plot")
+    except Exception as e:
+        logger.error(f"Failed to generate error vs uncertainty plot: {e}")
+
+    try:
+        plot_uncertainty_calibration(
+            y_true=test_targets,
+            y_pred_mean=test_preds,
+            y_pred_std=test_preds_std,
+            save_path=run_dir / "figures" / "uncertainty_calibration_test",
+            config=config,
+        )
+        logger.info("Saved uncertainty calibration plot")
+    except Exception as e:
+        logger.error(f"Failed to generate uncertainty calibration plot: {e}")
 
     # Generate training history plots
     logger.info("\nGenerating training history plots...")
@@ -678,7 +774,8 @@ def main():
         "best_val_loss": best_val_loss,
         "test_metrics": test_metrics,
         "run_dir": str(run_dir),
-        "model_checkpoint": str(run_dir / "checkpoints" / "best_model.pt"),
+        "best_model_checkpoint": str(run_dir / "checkpoints" / "best_model.pt"),
+        "final_model_checkpoint": str(run_dir / "checkpoints" / "final_model.pt"),
     }
 
     with open(run_dir / "summary.json", "w") as f:

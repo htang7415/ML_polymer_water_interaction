@@ -46,11 +46,15 @@ from src.evaluation.analysis import (
 from src.evaluation.plots import (
     plot_training_history,
     plot_parity_with_temperature,
+    plot_parity_with_uncertainty,
     plot_residual_vs_temperature,
     plot_calibration,
     plot_confusion_matrix,
     plot_chi_rt_vs_solubility,
+    plot_error_vs_uncertainty,
+    plot_uncertainty_calibration,
 )
+from src.evaluation.uncertainty import mc_predict_batch, enable_mc_dropout
 from src.evaluation.metrics import compute_confusion_matrix
 from src.models.multitask_model import MultiTaskChiSolubilityModel
 from src.training.losses import (
@@ -543,51 +547,113 @@ def validate(
 def plot_multitask_results(
     predictions: dict,
     save_dir: Path,
+    config: Config,
     title_prefix: str = "Validation",
     dpi: int = 300,
+    uncertainties: dict = None,
 ):
     """
-    Create plots for all tasks.
+    Create plots for all tasks with optional uncertainty visualization.
 
     Args:
         predictions: Dictionary of predictions for each task
         save_dir: Directory to save figures
+        config: Configuration object
         title_prefix: Prefix for plot titles
         dpi: Figure DPI
+        uncertainties: Optional dictionary of uncertainties {"dft_std": array, "exp_std": array}
     """
     save_dir.mkdir(parents=True, exist_ok=True)
 
-    # DFT chi parity plot
+    # DFT chi parity plot with uncertainty
     dft_preds, dft_targets = predictions["dft"]
-    fig, ax = plt.subplots(figsize=(4.5, 4.5))
-    ax.scatter(dft_targets, dft_preds, alpha=0.5, s=20, edgecolors='none')
-    min_val = min(dft_targets.min(), dft_preds.min())
-    max_val = max(dft_targets.max(), dft_preds.max())
-    ax.plot([min_val, max_val], [min_val, max_val], 'k--', lw=2, label='Perfect prediction')
-    ax.set_xlabel("True Chi (DFT)", fontsize=12)
-    ax.set_ylabel("Predicted Chi", fontsize=12)
-    ax.set_title(f"{title_prefix} - DFT Chi", fontsize=14)
-    ax.legend()
-    ax.set_aspect('equal', adjustable='box')
-    plt.tight_layout()
-    plt.savefig(save_dir / "parity_dft_chi.png", dpi=dpi, bbox_inches='tight')
-    plt.close()
+    if uncertainties is not None and "dft_std" in uncertainties:
+        # Use uncertainty-aware parity plot
+        try:
+            plot_parity_with_uncertainty(
+                y_true=dft_targets,
+                y_pred_mean=dft_preds,
+                y_pred_std=uncertainties["dft_std"],
+                save_path=save_dir / "parity_dft_chi",
+                config=config,
+                title=f"{title_prefix} - DFT Chi with Uncertainty",
+                error_bar_type="color",
+            )
+        except Exception as e:
+            # Fallback to basic parity plot
+            fig, ax = plt.subplots(figsize=(4.5, 4.5))
+            ax.scatter(dft_targets, dft_preds, alpha=0.5, s=20, edgecolors='none')
+            min_val = min(dft_targets.min(), dft_preds.min())
+            max_val = max(dft_targets.max(), dft_preds.max())
+            ax.plot([min_val, max_val], [min_val, max_val], 'k--', lw=2, label='Perfect prediction')
+            ax.set_xlabel("True Chi (DFT)", fontsize=12)
+            ax.set_ylabel("Predicted Chi", fontsize=12)
+            ax.set_title(f"{title_prefix} - DFT Chi", fontsize=14)
+            ax.legend()
+            ax.set_aspect('equal', adjustable='box')
+            plt.tight_layout()
+            plt.savefig(save_dir / "parity_dft_chi.png", dpi=dpi, bbox_inches='tight')
+            plt.close()
+    else:
+        # Basic parity plot without uncertainty
+        fig, ax = plt.subplots(figsize=(4.5, 4.5))
+        ax.scatter(dft_targets, dft_preds, alpha=0.5, s=20, edgecolors='none')
+        min_val = min(dft_targets.min(), dft_preds.min())
+        max_val = max(dft_targets.max(), dft_preds.max())
+        ax.plot([min_val, max_val], [min_val, max_val], 'k--', lw=2, label='Perfect prediction')
+        ax.set_xlabel("True Chi (DFT)", fontsize=12)
+        ax.set_ylabel("Predicted Chi", fontsize=12)
+        ax.set_title(f"{title_prefix} - DFT Chi", fontsize=14)
+        ax.legend()
+        ax.set_aspect('equal', adjustable='box')
+        plt.tight_layout()
+        plt.savefig(save_dir / "parity_dft_chi.png", dpi=dpi, bbox_inches='tight')
+        plt.close()
 
-    # Exp chi parity plot
+    # Exp chi parity plot with uncertainty
     exp_preds, exp_targets = predictions["exp"]
-    fig, ax = plt.subplots(figsize=(4.5, 4.5))
-    ax.scatter(exp_targets, exp_preds, alpha=0.5, s=20, edgecolors='none')
-    min_val = min(exp_targets.min(), exp_preds.min())
-    max_val = max(exp_targets.max(), exp_preds.max())
-    ax.plot([min_val, max_val], [min_val, max_val], 'k--', lw=2, label='Perfect prediction')
-    ax.set_xlabel("True Chi (Experimental)", fontsize=12)
-    ax.set_ylabel("Predicted Chi", fontsize=12)
-    ax.set_title(f"{title_prefix} - Experimental Chi", fontsize=14)
-    ax.legend()
-    ax.set_aspect('equal', adjustable='box')
-    plt.tight_layout()
-    plt.savefig(save_dir / "parity_exp_chi.png", dpi=dpi, bbox_inches='tight')
-    plt.close()
+    if uncertainties is not None and "exp_std" in uncertainties:
+        # Use uncertainty-aware parity plot
+        try:
+            plot_parity_with_uncertainty(
+                y_true=exp_targets,
+                y_pred_mean=exp_preds,
+                y_pred_std=uncertainties["exp_std"],
+                save_path=save_dir / "parity_exp_chi",
+                config=config,
+                title=f"{title_prefix} - Experimental Chi with Uncertainty",
+                error_bar_type="bars",  # Use error bars for smaller dataset
+            )
+        except Exception as e:
+            # Fallback to basic parity plot
+            fig, ax = plt.subplots(figsize=(4.5, 4.5))
+            ax.scatter(exp_targets, exp_preds, alpha=0.5, s=20, edgecolors='none')
+            min_val = min(exp_targets.min(), exp_preds.min())
+            max_val = max(exp_targets.max(), exp_preds.max())
+            ax.plot([min_val, max_val], [min_val, max_val], 'k--', lw=2, label='Perfect prediction')
+            ax.set_xlabel("True Chi (Experimental)", fontsize=12)
+            ax.set_ylabel("Predicted Chi", fontsize=12)
+            ax.set_title(f"{title_prefix} - Experimental Chi", fontsize=14)
+            ax.legend()
+            ax.set_aspect('equal', adjustable='box')
+            plt.tight_layout()
+            plt.savefig(save_dir / "parity_exp_chi.png", dpi=dpi, bbox_inches='tight')
+            plt.close()
+    else:
+        # Basic parity plot without uncertainty
+        fig, ax = plt.subplots(figsize=(4.5, 4.5))
+        ax.scatter(exp_targets, exp_preds, alpha=0.5, s=20, edgecolors='none')
+        min_val = min(exp_targets.min(), exp_preds.min())
+        max_val = max(exp_targets.max(), exp_preds.max())
+        ax.plot([min_val, max_val], [min_val, max_val], 'k--', lw=2, label='Perfect prediction')
+        ax.set_xlabel("True Chi (Experimental)", fontsize=12)
+        ax.set_ylabel("Predicted Chi", fontsize=12)
+        ax.set_title(f"{title_prefix} - Experimental Chi", fontsize=14)
+        ax.legend()
+        ax.set_aspect('equal', adjustable='box')
+        plt.tight_layout()
+        plt.savefig(save_dir / "parity_exp_chi.png", dpi=dpi, bbox_inches='tight')
+        plt.close()
 
     # Solubility ROC curve (if sklearn available)
     try:
@@ -799,10 +865,11 @@ def main():
 
             logger.info(f"Saved best model to {checkpoint_path}")
 
-            # Plot results
+            # Plot results (without uncertainty during training for speed)
             plot_multitask_results(
                 val_predictions,
                 run_dir / "figures" / "best",
+                config,
                 title_prefix=f"Validation (Epoch {epoch})",
                 dpi=config.plotting.dpi,
             )
@@ -825,11 +892,26 @@ def main():
     logger.info(f"Best epoch: {best_epoch}")
     logger.info(f"Best experimental chi MAE: {best_val_metric:.4f}")
 
+    # Save final model (last epoch)
+    final_checkpoint_path = run_dir / "checkpoints" / "final_model.pt"
+    final_checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+
+    torch.save({
+        "epoch": epoch,
+        "model_state_dict": model.state_dict(),
+        "optimizer_state_dict": optimizer.state_dict(),
+        "val_metrics": val_metrics,
+        "config": config.to_dict(),
+    }, final_checkpoint_path)
+
+    logger.info(f"Saved final model (epoch {epoch}) to {final_checkpoint_path}")
+
     # Load best model and evaluate on test set
     logger.info("\nEvaluating on test set...")
     checkpoint = torch.load(run_dir / "checkpoints" / "best_model.pt")
     model.load_state_dict(checkpoint["model_state_dict"])
 
+    # Get basic metrics for logging
     test_metrics, test_predictions = validate(model, test_loaders, config, device)
 
     logger.info(
@@ -848,37 +930,97 @@ def main():
         f"ROC-AUC: {test_metrics['sol_roc_auc']:.4f}"
     )
 
-    # Plot test results
+    # Get MC dropout uncertainty estimates for chi predictions
+    logger.info("Computing test predictions with MC dropout uncertainty...")
+    enable_mc_dropout(model)
+
+    # DFT chi uncertainty
+    test_uncertainties = {}
+    if test_loaders["dft"] is not None:
+        dft_mc_results = mc_predict_batch(
+            model=model,
+            dataloader=test_loaders["dft"],
+            T_ref=config.data.reference_temperature,
+            n_samples=config.uncertainty.mc_dropout_samples,
+            device=device,
+            predict_solubility=False,
+        )
+        test_uncertainties["dft_std"] = dft_mc_results["chi_std"]
+        # Update predictions with MC dropout means
+        test_predictions["dft"] = (dft_mc_results["chi_mean"], dft_mc_results["chi_true"])
+
+    # Experimental chi uncertainty
+    if test_loaders["exp"] is not None:
+        exp_mc_results = mc_predict_batch(
+            model=model,
+            dataloader=test_loaders["exp"],
+            T_ref=config.data.reference_temperature,
+            n_samples=config.uncertainty.mc_dropout_samples,
+            device=device,
+            predict_solubility=False,
+        )
+        test_uncertainties["exp_std"] = exp_mc_results["chi_std"]
+        # Update predictions with MC dropout means
+        test_predictions["exp"] = (exp_mc_results["chi_mean"], exp_mc_results["chi_true"])
+
+    # Plot test results with uncertainty
     plot_multitask_results(
         test_predictions,
         run_dir / "figures" / "test",
+        config,
         title_prefix="Test Set",
         dpi=config.plotting.dpi,
+        uncertainties=test_uncertainties,
     )
 
-    # Save detailed predictions to CSV
+    # Plot uncertainty calibration for experimental chi (most important)
+    if "exp_std" in test_uncertainties:
+        exp_preds, exp_targets = test_predictions["exp"]
+        try:
+            plot_error_vs_uncertainty(
+                y_true=exp_targets,
+                y_pred_mean=exp_preds,
+                y_pred_std=test_uncertainties["exp_std"],
+                save_path=run_dir / "figures" / "test" / "error_vs_uncertainty_exp",
+                config=config,
+                title="Experimental Chi: Error vs Uncertainty",
+            )
+            logger.info("Saved error vs uncertainty plot for experimental chi")
+        except Exception as e:
+            logger.error(f"Failed to generate error vs uncertainty plot: {e}")
+
+        try:
+            plot_uncertainty_calibration(
+                y_true=exp_targets,
+                y_pred_mean=exp_preds,
+                y_pred_std=test_uncertainties["exp_std"],
+                save_path=run_dir / "figures" / "test" / "uncertainty_calibration_exp",
+                config=config,
+                title="Experimental Chi: Uncertainty Calibration",
+            )
+            logger.info("Saved uncertainty calibration plot for experimental chi")
+        except Exception as e:
+            logger.error(f"Failed to generate uncertainty calibration plot: {e}")
+
+    # Save detailed predictions to CSV with uncertainty
     # DFT chi predictions
     dft_preds, dft_targets = test_predictions["dft"]
-    df_dft = pd.DataFrame({
-        "true_value": dft_targets,
-        "predicted_value": dft_preds,
-        "error": dft_preds - dft_targets,
-        "abs_error": np.abs(dft_preds - dft_targets),
-        "squared_error": (dft_preds - dft_targets) ** 2,
-    })
-    df_dft.to_csv(run_dir / "test_predictions_dft_chi.csv", index=False)
+    save_detailed_predictions(
+        predictions=dft_preds,
+        targets=dft_targets,
+        save_path=run_dir / "test_predictions_dft_chi.csv",
+        uncertainties=test_uncertainties.get("dft_std"),
+    )
     logger.info(f"DFT chi predictions saved to test_predictions_dft_chi.csv")
 
     # Experimental chi predictions
     exp_preds, exp_targets = test_predictions["exp"]
-    df_exp = pd.DataFrame({
-        "true_value": exp_targets,
-        "predicted_value": exp_preds,
-        "error": exp_preds - exp_targets,
-        "abs_error": np.abs(exp_preds - exp_targets),
-        "squared_error": (exp_preds - exp_targets) ** 2,
-    })
-    df_exp.to_csv(run_dir / "test_predictions_exp_chi.csv", index=False)
+    save_detailed_predictions(
+        predictions=exp_preds,
+        targets=exp_targets,
+        save_path=run_dir / "test_predictions_exp_chi.csv",
+        uncertainties=test_uncertainties.get("exp_std"),
+    )
     logger.info(f"Experimental chi predictions saved to test_predictions_exp_chi.csv")
 
     # Solubility predictions
@@ -1015,7 +1157,8 @@ def main():
         "best_exp_mae": best_val_metric,
         "test_metrics": test_metrics,
         "run_dir": str(run_dir),
-        "model_checkpoint": str(run_dir / "checkpoints" / "best_model.pt"),
+        "best_model_checkpoint": str(run_dir / "checkpoints" / "best_model.pt"),
+        "final_model_checkpoint": str(run_dir / "checkpoints" / "final_model.pt"),
     }
 
     with open(run_dir / "summary.json", "w") as f:
