@@ -553,53 +553,6 @@ def main():
 
             logger.info(f"Saved best model to {checkpoint_path}")
 
-            # Get detailed validation predictions with MC dropout uncertainty
-            logger.info("Computing validation predictions with MC dropout uncertainty...")
-            enable_mc_dropout(model)
-            mc_results = mc_predict_batch(
-                model=model,
-                dataloader=val_loader,
-                T_ref=config.data.reference_temperature,
-                n_samples=config.uncertainty.mc_dropout_samples,
-                device=device,
-                predict_solubility=False,
-            )
-            model.train()  # Restore training mode
-
-            val_preds_mean = mc_results["chi_mean"]
-            val_preds_std = mc_results["chi_std"]
-            val_targets_detailed = mc_results["chi_true"]
-            val_temps = mc_results["temperatures"]
-            val_A_mean = mc_results["A_mean"]
-            val_B_mean = mc_results["B_mean"]
-            val_smiles = mc_results["smiles"]
-
-            # Save detailed best predictions with uncertainty
-            save_detailed_predictions(
-                predictions=val_preds_mean,
-                targets=val_targets_detailed,
-                save_path=run_dir / "val_predictions_best.csv",
-                smiles=val_smiles,
-                temperatures=val_temps,
-                A_params=val_A_mean,
-                B_params=val_B_mean,
-                uncertainties=val_preds_std,
-            )
-
-            # Plot parity with uncertainty
-            try:
-                plot_parity_with_uncertainty(
-                    y_true=val_targets_detailed,
-                    y_pred_mean=val_preds_mean,
-                    y_pred_std=val_preds_std,
-                    save_path=run_dir / "figures" / "parity_plot_best",
-                    config=config,
-                    title=f"DFT Chi Parity Plot with Uncertainty (Epoch {epoch})",
-                    error_bar_type="color",  # Use color-coding for potentially many points
-                )
-            except Exception as e:
-                logger.warning(f"Failed to generate uncertainty parity plot: {e}")
-
         else:
             patience_counter += 1
 
@@ -633,10 +586,81 @@ def main():
 
     logger.info(f"Saved final model (epoch {epoch}) to {final_checkpoint_path}")
 
-    # Load best model and evaluate on test set with MC dropout
-    logger.info("\nEvaluating on test set...")
+    # Load best model and evaluate on train and test sets with MC dropout
+    logger.info("\nLoading best model for final evaluation...")
     checkpoint = torch.load(run_dir / "checkpoints" / "best_model.pt")
     model.load_state_dict(checkpoint["model_state_dict"])
+
+    # ========================================================================
+    # Evaluate on training set
+    # ========================================================================
+    logger.info("\nEvaluating on training set...")
+
+    # Get basic metrics for logging
+    train_metrics, _, _ = validate(
+        model, train_loader, config, device, return_detailed=False
+    )
+
+    logger.info(
+        f"Train - Loss: {train_metrics['loss']:.4f}, "
+        f"MAE: {train_metrics['mae']:.4f}, "
+        f"RMSE: {train_metrics['rmse']:.4f}, "
+        f"R²: {train_metrics['r2']:.4f}"
+    )
+
+    # Get detailed train predictions with MC dropout uncertainty
+    logger.info("Computing train predictions with MC dropout uncertainty...")
+    enable_mc_dropout(model)
+    train_mc_results = mc_predict_batch(
+        model=model,
+        dataloader=train_loader,
+        T_ref=config.model.T_ref_K,
+        n_samples=config.uncertainty.mc_dropout_samples,
+        device=device,
+        predict_solubility=False,
+    )
+
+    train_preds = train_mc_results["chi_mean"]
+    train_preds_std = train_mc_results["chi_std"]
+    train_targets = train_mc_results["chi_true"]
+    train_temps = train_mc_results["temperatures"]
+    train_A = train_mc_results["A_mean"]
+    train_B = train_mc_results["B_mean"]
+    train_smiles = train_mc_results["smiles"]
+
+    # Save detailed train predictions with uncertainty
+    save_detailed_predictions(
+        predictions=train_preds,
+        targets=train_targets,
+        save_path=run_dir / "train_predictions.csv",
+        smiles=train_smiles,
+        temperatures=train_temps,
+        A_params=train_A,
+        B_params=train_B,
+        uncertainties=train_preds_std,
+    )
+    logger.info(f"Saved train predictions with uncertainty to train_predictions.csv")
+
+    # Plot train parity with uncertainty
+    logger.info("Generating train set uncertainty-aware parity plots...")
+    try:
+        plot_parity_with_uncertainty(
+            y_true=train_targets,
+            y_pred_mean=train_preds,
+            y_pred_std=train_preds_std,
+            save_path=run_dir / "figures" / "parity_with_uncertainty_train",
+            config=config,
+            title="DFT Chi Parity Plot with Uncertainty (Train Set)",
+            error_bar_type="color",
+        )
+        logger.info("Saved train uncertainty parity plot")
+    except Exception as e:
+        logger.error(f"Failed to generate train uncertainty parity plot: {e}")
+
+    # ========================================================================
+    # Evaluate on test set
+    # ========================================================================
+    logger.info("\nEvaluating on test set...")
 
     # Get basic metrics for logging
     test_metrics, _, _ = validate(
@@ -656,7 +680,7 @@ def main():
     test_mc_results = mc_predict_batch(
         model=model,
         dataloader=test_loader,
-        T_ref=config.data.reference_temperature,
+        T_ref=config.model.T_ref_K,
         n_samples=config.uncertainty.mc_dropout_samples,
         device=device,
         predict_solubility=False,
