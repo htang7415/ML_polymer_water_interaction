@@ -64,7 +64,7 @@ training:
 
   # Batch sizes
   batch_size_dft: 256       # Large batch for DFT data (many samples)
-  batch_size_exp: 32        # Smaller batch for experimental χ (few samples)
+  batch_size_exp: 64        # Increased from 32 to get more gradient updates
   batch_size_sol: 64        # Medium batch for solubility
 
   # Number of epochs
@@ -78,8 +78,15 @@ training:
   lr_pretrain: 1.0e-3    # Stage 1
   lr_finetune: 3.0e-4    # Stage 2 (typically lower)
 
+  # Transfer learning: Discriminative learning rates
+  use_discriminative_lr: true  # Use different LRs for encoder vs heads
+  lr_encoder: 1.0e-5           # Very low LR for pretrained encoder
+
+  # Transfer learning: Encoder freezing
+  freeze_encoder_stage2: true  # Freeze encoder initially in Stage 2
+
   # Regularization
-  weight_decay: 1.0e-4
+  weight_decay: 1.0e-3         # Increased from 1e-4 for small datasets
 
   # Learning rate scheduler
   use_scheduler: true
@@ -110,18 +117,18 @@ model:
   # Shared encoder
   encoder_hidden_dims: [512, 256]  # List of hidden layer dimensions
   encoder_latent_dim: 128          # Output dimension z(polymer)
-  encoder_dropout: 0.2             # Dropout probability in encoder
+  encoder_dropout: 0.3             # Increased from 0.2 for better regularization
   encoder_activation: "relu"       # "relu", "elu", "leaky_relu"
   encoder_use_batchnorm: true      # Use batch normalization
 
   # χ(T) head (outputs A and B)
   chi_head_hidden_dim: 64
-  chi_head_dropout: 0.1
+  chi_head_dropout: 0.2            # Increased from 0.1 for better regularization
   chi_head_activation: "relu"
 
   # Solubility head
   sol_head_hidden_dim: 64
-  sol_head_dropout: 0.1
+  sol_head_dropout: 0.2            # Increased from 0.1 for better regularization
   sol_head_activation: "relu"
 
   # Reference temperature for χ_RT (Kelvin)
@@ -131,8 +138,8 @@ model:
 # Loss: Multi-task loss weights
 # ============================================================================
 loss_weights:
-  lambda_dft: 0.5   # Weight for DFT χ loss
-  lambda_exp: 2.0   # Weight for experimental χ loss (upweight small dataset)
+  lambda_dft: 0.0   # Set to 0.0 to drop DFT from Stage 2 (focus on target tasks)
+  lambda_exp: 3.0   # Increased from 2.0 - primary task for Stage 2
   lambda_sol: 1.0   # Weight for solubility loss
 
 # ============================================================================
@@ -140,11 +147,15 @@ loss_weights:
 # ============================================================================
 solubility:
   # Class weights for weighted BCE loss (handle class imbalance)
-  class_weight_pos: 2.0  # Weight for soluble (positive) class
+  class_weight_pos: 5.0  # Increased from 2.0 to improve recall
   class_weight_neg: 1.0  # Weight for insoluble (negative) class
 
   # Decision threshold for classification
-  decision_threshold: 0.5
+  decision_threshold: 0.5  # Will be optimized dynamically
+
+  # Threshold optimization
+  optimize_threshold: true    # Enable dynamic threshold optimization
+  threshold_metric: "f1"      # Optimize for F1 score (can be "recall", "precision", "youden")
 
   # Stratified splitting (maintain class balance in train/val/test)
   stratify: true
@@ -187,8 +198,8 @@ uncertainty:
 # ============================================================================
 hparam_search:
   # Optuna settings
-  n_trials: 100
-  timeout_hours: 24  # Max time for entire search
+  n_trials: 200
+  timeout_hours: 72  # Max time for entire search
 
   # Pruning (early stopping for bad trials)
   use_pruning: true

@@ -62,6 +62,7 @@ from src.training.losses import (
     compute_metrics_regression,
     compute_metrics_classification,
 )
+from src.training.threshold_optimization import find_optimal_threshold
 from src.utils.config import Config, load_config, save_config
 from src.utils.logging_utils import create_run_directory, get_logger, setup_logging, MetricsLogger
 from src.utils.seed_utils import set_seed, worker_init_fn
@@ -281,30 +282,25 @@ def load_and_prepare_data(
         collate_fn=collate_solubility,
     )
 
+    # Stage 2: Drop DFT data, focus on target tasks (exp chi + solubility)
     train_loaders = {
-        "dft": train_dft_loader,
         "exp": train_exp_loader,
         "sol": train_sol_loader,
     }
 
     val_loaders = {
-        "dft": val_dft_loader,
         "exp": val_exp_loader,
         "sol": val_sol_loader,
     }
 
     test_loaders = {
-        "dft": test_dft_loader,
         "exp": test_exp_loader,
         "sol": test_sol_loader,
     }
 
-    logger.info(f"Train batches - DFT: {len(train_dft_loader)}, "
-                f"Exp: {len(train_exp_loader)}, Sol: {len(train_sol_loader)}")
-    logger.info(f"Val batches - DFT: {len(val_dft_loader)}, "
-                f"Exp: {len(val_exp_loader)}, Sol: {len(val_sol_loader)}")
-    logger.info(f"Test batches - DFT: {len(test_dft_loader)}, "
-                f"Exp: {len(test_exp_loader)}, Sol: {len(test_sol_loader)}")
+    logger.info(f"Train batches - Exp: {len(train_exp_loader)}, Sol: {len(train_sol_loader)} (DFT dropped in Stage 2)")
+    logger.info(f"Val batches - Exp: {len(val_exp_loader)}, Sol: {len(val_sol_loader)}")
+    logger.info(f"Test batches - Exp: {len(test_exp_loader)}, Sol: {len(test_sol_loader)}")
 
     return train_loaders, val_loaders, test_loaders, feature_dim
 
@@ -334,40 +330,20 @@ def train_epoch(
     model.train()
 
     total_loss = 0.0
-    task_losses = {"dft": 0.0, "exp": 0.0, "sol": 0.0}
-    task_counts = {"dft": 0, "exp": 0, "sol": 0}
+    task_losses = {"exp": 0.0, "sol": 0.0}
+    task_counts = {"exp": 0, "sol": 0}
 
-    # Cycle through all dataloaders
-    # Simple approach: iterate through longest dataloader, cycling shorter ones
-    dft_iter = iter(train_loaders["dft"])
+    # Cycle through all dataloaders (DFT dropped in Stage 2)
     exp_iter = iter(train_loaders["exp"])
     sol_iter = iter(train_loaders["sol"])
 
-    max_batches = max(len(train_loaders["dft"]), len(train_loaders["exp"]), len(train_loaders["sol"]))
+    max_batches = max(len(train_loaders["exp"]), len(train_loaders["sol"]))
 
     pbar = tqdm(range(max_batches), desc="Training", leave=False)
 
     for batch_idx in pbar:
         batch_loss = 0.0
         n_tasks = 0
-
-        # DFT batch
-        try:
-            batch_dft = next(dft_iter)
-        except StopIteration:
-            dft_iter = iter(train_loaders["dft"])
-            batch_dft = next(dft_iter)
-
-        x_dft = batch_dft["x"].to(device)
-        chi_dft = batch_dft["chi_dft"].to(device)
-        temp_dft = batch_dft["temperature"].to(device)  # Use actual temperatures
-
-        outputs = model(x_dft, temperature=temp_dft)
-        loss_dft, _ = multitask_loss(outputs, chi_dft_true=chi_dft, config=config)
-        batch_loss += loss_dft
-        task_losses["dft"] += loss_dft.item()
-        task_counts["dft"] += 1
-        n_tasks += 1
 
         # Exp chi batch
         try:
@@ -438,7 +414,6 @@ def train_epoch(
 
     metrics = {
         "loss": avg_loss,
-        "loss_dft": avg_task_losses["dft"],
         "loss_exp": avg_task_losses["exp"],
         "loss_sol": avg_task_losses["sol"],
     }
@@ -468,24 +443,7 @@ def validate(
     """
     model.eval()
 
-    # DFT chi validation
-    dft_preds, dft_targets = [], []
-    for batch in val_loaders["dft"]:
-        x = batch["x"].to(device)
-        chi_true = batch["chi_dft"].to(device)
-        temp_dft = batch["temperature"].to(device)  # Use actual temperatures
-
-        outputs = model(x, temperature=temp_dft)
-        chi_pred = outputs["chi"]
-
-        dft_preds.append(chi_pred.cpu())
-        dft_targets.append(chi_true.cpu())
-
-    dft_preds = torch.cat(dft_preds)
-    dft_targets = torch.cat(dft_targets)
-    dft_metrics = compute_metrics_regression(dft_preds, dft_targets)
-
-    # Exp chi validation
+    # Exp chi validation (DFT dropped in Stage 2)
     exp_preds, exp_targets = [], []
     for batch in val_loaders["exp"]:
         x = batch["x"].to(device)
@@ -516,27 +474,42 @@ def validate(
 
     sol_preds = torch.cat(sol_preds)
     sol_targets = torch.cat(sol_targets)
-    sol_metrics = compute_metrics_classification(
-        sol_preds, sol_targets, threshold=config.solubility.decision_threshold
-    )
 
-    # Combine metrics
+    # Optimize decision threshold if specified
+    threshold_to_use = config.solubility.decision_threshold
+    if hasattr(config.solubility, 'optimize_threshold') and config.solubility.optimize_threshold:
+        optimal_threshold, threshold_metrics = find_optimal_threshold(
+            y_true=sol_targets.numpy(),
+            y_prob=sol_preds.numpy(),
+            metric=getattr(config.solubility, 'threshold_metric', 'f1'),
+        )
+        threshold_to_use = optimal_threshold
+        # Note: In training loop, logger will report the optimal threshold found
+
+    sol_metrics = compute_metrics_classification(
+        sol_preds, sol_targets, threshold=threshold_to_use
+    )
+    # Store the threshold used for metrics
+    sol_metrics['threshold_used'] = threshold_to_use
+
+    # Combine metrics (DFT dropped in Stage 2)
     metrics = {
-        "dft_mae": dft_metrics["mae"],
-        "dft_rmse": dft_metrics["rmse"],
-        "dft_r2": dft_metrics["r2"],
-        "exp_mae": exp_metrics["mae"],
-        "exp_rmse": exp_metrics["rmse"],
-        "exp_r2": exp_metrics["r2"],
-        "sol_accuracy": sol_metrics["accuracy"],
-        "sol_precision": sol_metrics["precision"],
-        "sol_recall": sol_metrics["recall"],
-        "sol_f1": sol_metrics["f1"],
-        "sol_roc_auc": sol_metrics["roc_auc"],
+        "exp": {
+            "mae": exp_metrics["mae"],
+            "rmse": exp_metrics["rmse"],
+            "r2": exp_metrics["r2"],
+        },
+        "sol": {
+            "accuracy": sol_metrics["accuracy"],
+            "precision": sol_metrics["precision"],
+            "recall": sol_metrics["recall"],
+            "f1": sol_metrics["f1"],
+            "roc_auc": sol_metrics["roc_auc"],
+            "threshold_used": threshold_to_use,
+        },
     }
 
     predictions = {
-        "dft": (dft_preds.numpy(), dft_targets.numpy()),
         "exp": (exp_preds.numpy(), exp_targets.numpy()),
         "sol": (sol_preds.numpy(), sol_targets.numpy()),
     }
@@ -565,50 +538,7 @@ def plot_multitask_results(
     """
     save_dir.mkdir(parents=True, exist_ok=True)
 
-    # DFT chi parity plot with uncertainty
-    dft_preds, dft_targets = predictions["dft"]
-    if uncertainties is not None and "dft_std" in uncertainties:
-        # Use uncertainty-aware parity plot
-        try:
-            plot_parity_with_uncertainty(
-                y_true=dft_targets,
-                y_pred_mean=dft_preds,
-                y_pred_std=uncertainties["dft_std"],
-                save_path=save_dir / "parity_dft_chi",
-                config=config,
-                title=f"{title_prefix} - DFT Chi with Uncertainty",
-                error_bar_type="color",
-            )
-        except Exception as e:
-            # Fallback to basic parity plot
-            fig, ax = plt.subplots(figsize=(4.5, 4.5))
-            ax.scatter(dft_targets, dft_preds, alpha=0.5, s=20, edgecolors='none')
-            min_val = min(dft_targets.min(), dft_preds.min())
-            max_val = max(dft_targets.max(), dft_preds.max())
-            ax.plot([min_val, max_val], [min_val, max_val], 'k--', lw=2, label='Perfect prediction')
-            ax.set_xlabel("True Chi (DFT)", fontsize=12)
-            ax.set_ylabel("Predicted Chi", fontsize=12)
-            ax.set_title(f"{title_prefix} - DFT Chi", fontsize=14)
-            ax.legend()
-            ax.set_aspect('equal', adjustable='box')
-            plt.tight_layout()
-            plt.savefig(save_dir / "parity_dft_chi.png", dpi=dpi, bbox_inches='tight')
-            plt.close()
-    else:
-        # Basic parity plot without uncertainty
-        fig, ax = plt.subplots(figsize=(4.5, 4.5))
-        ax.scatter(dft_targets, dft_preds, alpha=0.5, s=20, edgecolors='none')
-        min_val = min(dft_targets.min(), dft_preds.min())
-        max_val = max(dft_targets.max(), dft_preds.max())
-        ax.plot([min_val, max_val], [min_val, max_val], 'k--', lw=2, label='Perfect prediction')
-        ax.set_xlabel("True Chi (DFT)", fontsize=12)
-        ax.set_ylabel("Predicted Chi", fontsize=12)
-        ax.set_title(f"{title_prefix} - DFT Chi", fontsize=14)
-        ax.legend()
-        ax.set_aspect('equal', adjustable='box')
-        plt.tight_layout()
-        plt.savefig(save_dir / "parity_dft_chi.png", dpi=dpi, bbox_inches='tight')
-        plt.close()
+    # DFT plotting removed in Stage 2 (focus on target tasks)
 
     # Exp chi parity plot with uncertainty
     exp_preds, exp_targets = predictions["exp"]
@@ -676,6 +606,20 @@ def plot_multitask_results(
     except ImportError:
         pass
 
+    # Confusion matrix for solubility
+    try:
+        sol_preds, sol_targets = predictions["sol"]
+        threshold = config.solubility.decision_threshold
+        cm, counts = compute_confusion_matrix(sol_targets, sol_preds, threshold=threshold)
+        plot_confusion_matrix(
+            cm=cm,
+            save_path=save_dir / "confusion_matrix_solubility",
+            config=config,
+            title=f"{title_prefix} - Solubility Confusion Matrix (threshold={threshold})",
+        )
+    except Exception as e:
+        pass  # Silently skip if confusion matrix fails
+
 
 def main():
     """Main training function."""
@@ -738,24 +682,61 @@ def main():
     logger.info(f"Loading pretrained weights from {args.pretrained}")
     model.load_encoder_and_chi_head(args.pretrained)
 
+    # Freeze encoder if specified (for small dataset fine-tuning)
+    if config.training.get("freeze_encoder_stage2", False):
+        model.freeze_encoder()
+        logger.info("Encoder frozen for Stage 2 fine-tuning (prevents overfitting on small datasets)")
+
     model = model.to(device)
 
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     logger.info(f"Model has {n_params:,} trainable parameters")
 
-    # Setup optimizer
+    # Setup optimizer with discriminative learning rates
     optimizer_name = config.training.optimizer.lower()
     lr = config.training.lr_finetune
     weight_decay = config.training.weight_decay
 
-    if optimizer_name == "adam":
-        optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
-    elif optimizer_name == "adamw":
-        optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
-    else:
-        raise ValueError(f"Unknown optimizer: {optimizer_name}")
+    # Use discriminative learning rates if specified
+    if config.training.get("use_discriminative_lr", False):
+        param_groups = [
+            {
+                'params': model.encoder.parameters(),
+                'lr': config.training.get("lr_encoder", 1e-5),
+                'name': 'encoder'
+            },
+            {
+                'params': model.chi_head.parameters(),
+                'lr': lr,
+                'name': 'chi_head'
+            },
+            {
+                'params': model.solubility_head.parameters(),
+                'lr': lr,
+                'name': 'solubility_head'
+            },
+        ]
+        if optimizer_name == "adam":
+            optimizer = torch.optim.Adam(param_groups, weight_decay=weight_decay)
+        elif optimizer_name == "adamw":
+            optimizer = torch.optim.AdamW(param_groups, weight_decay=weight_decay)
+        else:
+            raise ValueError(f"Unknown optimizer: {optimizer_name}")
 
-    logger.info(f"Optimizer: {optimizer_name}, lr={lr}, weight_decay={weight_decay}")
+        logger.info(f"Using discriminative learning rates:")
+        logger.info(f"  Encoder: {config.training.get('lr_encoder', 1e-5)}")
+        logger.info(f"  Chi head: {lr}")
+        logger.info(f"  Solubility head: {lr}")
+    else:
+        # Standard single learning rate for all parameters
+        if optimizer_name == "adam":
+            optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
+        elif optimizer_name == "adamw":
+            optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
+        else:
+            raise ValueError(f"Unknown optimizer: {optimizer_name}")
+
+        logger.info(f"Optimizer: {optimizer_name}, lr={lr}, weight_decay={weight_decay}")
 
     # Setup scheduler
     scheduler = None
@@ -807,7 +788,6 @@ def main():
 
         logger.info(
             f"Train - Total Loss: {train_metrics['loss']:.4f}, "
-            f"DFT: {train_metrics['loss_dft']:.4f}, "
             f"Exp: {train_metrics['loss_exp']:.4f}, "
             f"Sol: {train_metrics['loss_sol']:.4f}"
         )
@@ -815,39 +795,51 @@ def main():
         # Validate
         val_metrics, val_predictions = validate(model, val_loaders, config, device)
 
+        # DFT metrics removed in Stage 2
         logger.info(
-            f"Val DFT   - MAE: {val_metrics['dft_mae']:.4f}, "
-            f"RMSE: {val_metrics['dft_rmse']:.4f}, "
-            f"R²: {val_metrics['dft_r2']:.4f}"
+            f"Val Exp   - MAE: {val_metrics['exp']['mae']:.4f}, "
+            f"RMSE: {val_metrics['exp']['rmse']:.4f}, "
+            f"R²: {val_metrics['exp']['r2']:.4f}"
         )
-        logger.info(
-            f"Val Exp   - MAE: {val_metrics['exp_mae']:.4f}, "
-            f"RMSE: {val_metrics['exp_rmse']:.4f}, "
-            f"R²: {val_metrics['exp_r2']:.4f}"
-        )
-        logger.info(
-            f"Val Sol   - Acc: {val_metrics['sol_accuracy']:.4f}, "
-            f"F1: {val_metrics['sol_f1']:.4f}, "
-            f"ROC-AUC: {val_metrics['sol_roc_auc']:.4f}"
-        )
+        # Log optimal threshold if optimization is enabled
+        if hasattr(config.solubility, 'optimize_threshold') and config.solubility.optimize_threshold:
+            threshold_used = val_metrics['sol'].get('threshold_used', config.solubility.decision_threshold)
+            logger.info(
+                f"Val Sol   - Acc: {val_metrics['sol']['accuracy']:.4f}, "
+                f"F1: {val_metrics['sol']['f1']:.4f}, "
+                f"Recall: {val_metrics['sol']['recall']:.4f}, "
+                f"ROC-AUC: {val_metrics['sol']['roc_auc']:.4f}, "
+                f"Threshold: {threshold_used:.3f}"
+            )
+        else:
+            logger.info(
+                f"Val Sol   - Acc: {val_metrics['sol']['accuracy']:.4f}, "
+                f"F1: {val_metrics['sol']['f1']:.4f}, "
+                f"ROC-AUC: {val_metrics['sol']['roc_auc']:.4f}"
+            )
 
-        # Log metrics
+        # Log metrics (flatten nested structure)
+        flat_val_metrics = {}
+        for task, task_metrics in val_metrics.items():
+            for metric_name, value in task_metrics.items():
+                flat_val_metrics[f"val_{task}_{metric_name}"] = value
+
         metrics_logger.log({
             "train_loss": train_metrics["loss"],
-            **{f"val_{k}": v for k, v in val_metrics.items()},
+            **flat_val_metrics,
             "lr": optimizer.param_groups[0]["lr"],
         }, step=epoch)
 
         # Update scheduler
         if scheduler is not None:
             if isinstance(scheduler, torch.optim.lr_scheduler.ReduceLROnPlateau):
-                scheduler.step(val_metrics["exp_mae"])
+                scheduler.step(val_metrics["exp"]["mae"])
             else:
                 scheduler.step()
 
         # Check for best model (using exp_mae as primary metric)
-        if val_metrics["exp_mae"] < best_val_metric:
-            best_val_metric = val_metrics["exp_mae"]
+        if val_metrics["exp"]["mae"] < best_val_metric:
+            best_val_metric = val_metrics["exp"]["mae"]
             best_epoch = epoch
             patience_counter = 0
 
@@ -914,40 +906,58 @@ def main():
     # Get basic metrics for logging
     test_metrics, test_predictions = validate(model, test_loaders, config, device)
 
+    # DFT metrics removed in Stage 2
     logger.info(
-        f"Test DFT  - MAE: {test_metrics['dft_mae']:.4f}, "
-        f"RMSE: {test_metrics['dft_rmse']:.4f}, "
-        f"R²: {test_metrics['dft_r2']:.4f}"
+        f"Test Exp  - MAE: {test_metrics['exp']['mae']:.4f}, "
+        f"RMSE: {test_metrics['exp']['rmse']:.4f}, "
+        f"R²: {test_metrics['exp']['r2']:.4f}"
     )
+    # Threshold analysis for test set
+    if hasattr(config.solubility, 'optimize_threshold') and config.solubility.optimize_threshold:
+        logger.info("\nThreshold Analysis (Test Set):")
+        sol_preds, sol_targets = test_predictions["sol"]
+
+        # Test performance at different thresholds
+        for test_threshold in [0.1, 0.2, 0.3, 0.4, 0.5]:
+            test_metrics_at_thresh = compute_metrics_classification(
+                torch.from_numpy(sol_preds),
+                torch.from_numpy(sol_targets),
+                threshold=test_threshold
+            )
+            logger.info(
+                f"  Threshold={test_threshold:.1f}: "
+                f"Recall={test_metrics_at_thresh['recall']:.3f}, "
+                f"Precision={test_metrics_at_thresh['precision']:.3f}, "
+                f"F1={test_metrics_at_thresh['f1']:.3f}"
+            )
+
+        # Find optimal threshold on test set (for reporting only, not for model selection)
+        optimal_test_threshold, test_threshold_metrics = find_optimal_threshold(
+            y_true=sol_targets,
+            y_prob=sol_preds,
+            metric=getattr(config.solubility, 'threshold_metric', 'f1'),
+        )
+        logger.info(
+            f"\nOptimal test threshold (for reference): {optimal_test_threshold:.3f} "
+            f"(F1={test_threshold_metrics['f1']:.3f}, "
+            f"Recall={test_threshold_metrics['recall']:.3f}, "
+            f"Precision={test_threshold_metrics['precision']:.3f})"
+        )
+
     logger.info(
-        f"Test Exp  - MAE: {test_metrics['exp_mae']:.4f}, "
-        f"RMSE: {test_metrics['exp_rmse']:.4f}, "
-        f"R²: {test_metrics['exp_r2']:.4f}"
-    )
-    logger.info(
-        f"Test Sol  - Acc: {test_metrics['sol_accuracy']:.4f}, "
-        f"F1: {test_metrics['sol_f1']:.4f}, "
-        f"ROC-AUC: {test_metrics['sol_roc_auc']:.4f}"
+        f"\nTest Sol  - Acc: {test_metrics['sol']['accuracy']:.4f}, "
+        f"Precision: {test_metrics['sol']['precision']:.4f}, "
+        f"Recall: {test_metrics['sol']['recall']:.4f}, "
+        f"F1: {test_metrics['sol']['f1']:.4f}, "
+        f"ROC-AUC: {test_metrics['sol']['roc_auc']:.4f}"
     )
 
     # Get MC dropout uncertainty estimates for chi predictions
     logger.info("Computing test predictions with MC dropout uncertainty...")
     enable_mc_dropout(model)
 
-    # DFT chi uncertainty
+    # DFT chi uncertainty removed in Stage 2
     test_uncertainties = {}
-    if test_loaders["dft"] is not None:
-        dft_mc_results = mc_predict_batch(
-            model=model,
-            dataloader=test_loaders["dft"],
-            T_ref=config.model.T_ref_K,
-            n_samples=config.uncertainty.mc_dropout_samples,
-            device=device,
-            predict_solubility=False,
-        )
-        test_uncertainties["dft_std"] = dft_mc_results["chi_std"]
-        # Update predictions with MC dropout means
-        test_predictions["dft"] = (dft_mc_results["chi_mean"], dft_mc_results["chi_true"])
 
     # Experimental chi uncertainty
     if test_loaders["exp"] is not None:
@@ -1002,17 +1012,7 @@ def main():
         except Exception as e:
             logger.error(f"Failed to generate uncertainty calibration plot: {e}")
 
-    # Save detailed predictions to CSV with uncertainty
-    # DFT chi predictions
-    dft_preds, dft_targets = test_predictions["dft"]
-    save_detailed_predictions(
-        predictions=dft_preds,
-        targets=dft_targets,
-        save_path=run_dir / "test_predictions_dft_chi.csv",
-        uncertainties=test_uncertainties.get("dft_std"),
-    )
-    logger.info(f"DFT chi predictions saved to test_predictions_dft_chi.csv")
-
+    # Save detailed predictions to CSV with uncertainty (DFT removed in Stage 2)
     # Experimental chi predictions
     exp_preds, exp_targets = test_predictions["exp"]
     save_detailed_predictions(
@@ -1068,7 +1068,7 @@ def main():
         threshold = config.solubility.decision_threshold
         cm, counts = compute_confusion_matrix(sol_targets, sol_preds, threshold=threshold)
         plot_confusion_matrix(
-            cm=counts,
+            cm=cm,  # Fixed: was passing 'counts' (dict) instead of 'cm' (array)
             save_path=run_dir / "figures" / "test" / "confusion_matrix_solubility",
             config=config,
             title=f"Solubility Confusion Matrix (Test Set, threshold={threshold})",
@@ -1077,8 +1077,98 @@ def main():
     except Exception as e:
         logger.error(f"Failed to generate confusion matrix: {e}")
 
+    # ========== TRAIN SET EVALUATION (Best Model) ==========
+    logger.info("\n" + "=" * 80)
+    logger.info("Evaluating best model on TRAIN set...")
+    logger.info("=" * 80)
+
+    # Run validation on train set
+    train_metrics, train_predictions = validate(model, train_loaders, config, device)
+
+    # Log train metrics
+    logger.info("\nTrain Set Metrics (Best Model):")
+    for task, metrics in train_metrics.items():
+        logger.info(f"\n{task.upper()}:")
+        for metric_name, value in metrics.items():
+            logger.info(f"  {metric_name}: {value:.4f}")
+
+    # Create train figures directory
+    train_fig_dir = run_dir / "figures" / "train"
+    train_fig_dir.mkdir(parents=True, exist_ok=True)
+
+    # Plot train set results
+    logger.info("\nGenerating train set plots...")
+    plot_multitask_results(
+        predictions=train_predictions,
+        save_dir=train_fig_dir,
+        config=config,
+        title_prefix="Train Set (Best Model)",
+    )
+
+    # Save train predictions
+    exp_preds, exp_targets = train_predictions["exp"]
+    save_detailed_predictions(
+        predictions=exp_preds,
+        targets=exp_targets,
+        save_path=run_dir / "train_predictions_exp_chi.csv",
+    )
+    logger.info(f"Experimental chi predictions saved to train_predictions_exp_chi.csv")
+
+    # Solubility predictions
+    train_sol_preds, train_sol_targets = train_predictions["sol"]
+    save_classification_predictions(
+        predictions_prob=train_sol_preds,
+        targets=train_sol_targets,
+        save_path=run_dir / "train_predictions_solubility.csv",
+        threshold=config.solubility.decision_threshold,
+    )
+    logger.info(f"Solubility predictions saved to train_predictions_solubility.csv")
+
+    # Train set calibration plot
+    try:
+        plot_calibration(
+            y_true=train_sol_targets,
+            y_prob=train_sol_preds,
+            save_path=run_dir / "figures" / "train" / "calibration_solubility",
+            config=config,
+            title="Solubility Prediction Calibration (Train Set)",
+        )
+        logger.info(f"Saved train calibration plot")
+    except Exception as e:
+        logger.error(f"Failed to generate train calibration plot: {e}")
+
+    # Train set ROC curve
+    try:
+        from sklearn.metrics import roc_curve, auc
+
+        fpr, tpr, _ = roc_curve(train_sol_targets, train_sol_preds)
+        roc_auc = auc(fpr, tpr)
+
+        fig, ax = plt.subplots(figsize=(4.5, 4.5))
+        ax.plot(fpr, tpr, lw=2, label=f'ROC curve (AUC = {roc_auc:.3f})')
+        ax.plot([0, 1], [0, 1], 'k--', lw=2, label='Random')
+        ax.set_xlabel("False Positive Rate", fontsize=12)
+        ax.set_ylabel("True Positive Rate", fontsize=12)
+        ax.set_title("Train Set - Solubility ROC", fontsize=14)
+        ax.legend()
+        plt.tight_layout()
+        plt.savefig(train_fig_dir / "roc_solubility.png", dpi=300, bbox_inches='tight')
+        plt.close()
+        logger.info(f"Saved train ROC curve")
+    except Exception as e:
+        logger.error(f"Failed to generate train ROC curve: {e}")
+
+    logger.info("=" * 80)
+    logger.info("Train set evaluation complete")
+    logger.info("=" * 80 + "\n")
+
     # Get detailed predictions with chi_RT for chi-solubility relationship analysis
     logger.info("\nRunning chi-solubility relationship analysis...")
+
+    # Create analysis directory early (fixed: prevents scope issues)
+    analysis_dir = run_dir / "analysis"
+    analysis_dir.mkdir(parents=True, exist_ok=True)
+
     try:
         # Compute chi_RT for test solubility data
         model.eval()
@@ -1087,11 +1177,11 @@ def main():
             sol_labels_list = []
             for batch in test_loaders["sol"]:
                 x = batch["x"].to(device)
-                temp_rt = torch.full((x.size(0),), config.solubility.T_ref).to(device)
+                temp_rt = torch.full((x.size(0),), config.model.T_ref_K).to(device)
                 outputs = model(x, temperature=temp_rt)
                 chi_rt = outputs["chi"]
                 chi_rt_list.append(chi_rt.cpu().numpy())
-                sol_labels_list.append(batch["solubility"].cpu().numpy())
+                sol_labels_list.append(batch["soluble"].cpu().numpy())
 
             chi_rt_array = np.concatenate(chi_rt_list)
             sol_labels_array = np.concatenate(sol_labels_list)
@@ -1111,12 +1201,10 @@ def main():
         analysis_results = analyze_chi_solubility_relationship(
             chi_rt=chi_rt_array,
             solubility_labels=sol_labels_array,
-            T_ref=config.solubility.T_ref,
+            T_ref=config.model.T_ref_K,
         )
 
-        # Save analysis results
-        analysis_dir = run_dir / "analysis"
-        analysis_dir.mkdir(parents=True, exist_ok=True)
+        # Save analysis results (analysis_dir already created above)
         with open(analysis_dir / "chi_solubility_analysis.json", "w") as f:
             json.dump(analysis_results, f, indent=2)
         logger.info(f"Saved chi-solubility analysis to {analysis_dir / 'chi_solubility_analysis.json'}")
@@ -1150,6 +1238,112 @@ def main():
 
     except Exception as e:
         logger.error(f"Failed to analyze A-parameter distribution: {e}")
+
+    # ========== FINAL MODEL EVALUATION (Last Epoch) ==========
+    logger.info("\n" + "=" * 80)
+    logger.info("Evaluating FINAL model (last epoch) on train and test sets...")
+    logger.info("=" * 80)
+
+    try:
+        # Load final model
+        final_checkpoint_path = run_dir / "checkpoints" / "final_model.pt"
+        final_checkpoint = torch.load(final_checkpoint_path, map_location=device)
+        model.load_state_dict(final_checkpoint["model_state_dict"])
+        logger.info(f"Loaded final model from epoch {final_checkpoint['epoch']}")
+
+        # Create final model figures directory
+        final_fig_dir = run_dir / "figures" / "final"
+        final_fig_dir.mkdir(parents=True, exist_ok=True)
+
+        # ===== TEST SET (Final Model) =====
+        logger.info("\nEvaluating final model on TEST set...")
+        final_test_metrics, final_test_predictions = validate(model, test_loaders, config, device)
+
+        logger.info("\nTest Set Metrics (Final Model):")
+        for task, metrics in final_test_metrics.items():
+            logger.info(f"\n{task.upper()}:")
+            for metric_name, value in metrics.items():
+                logger.info(f"  {metric_name}: {value:.4f}")
+
+        # Create test figures directory for final model
+        final_test_fig_dir = final_fig_dir / "test"
+        final_test_fig_dir.mkdir(parents=True, exist_ok=True)
+
+        # Plot final test results
+        plot_multitask_results(
+            predictions=final_test_predictions,
+            save_dir=final_test_fig_dir,
+            config=config,
+            title_prefix="Test Set (Final Model)",
+        )
+
+        # Save final test predictions
+        final_exp_preds, final_exp_targets = final_test_predictions["exp"]
+        save_detailed_predictions(
+            predictions=final_exp_preds,
+            targets=final_exp_targets,
+            save_path=run_dir / "test_predictions_exp_chi_final.csv",
+        )
+
+        final_sol_preds, final_sol_targets = final_test_predictions["sol"]
+        save_classification_predictions(
+            predictions_prob=final_sol_preds,
+            targets=final_sol_targets,
+            save_path=run_dir / "test_predictions_solubility_final.csv",
+            threshold=config.solubility.decision_threshold,
+        )
+
+        # ===== TRAIN SET (Final Model) =====
+        logger.info("\nEvaluating final model on TRAIN set...")
+        final_train_metrics, final_train_predictions = validate(model, train_loaders, config, device)
+
+        logger.info("\nTrain Set Metrics (Final Model):")
+        for task, metrics in final_train_metrics.items():
+            logger.info(f"\n{task.upper()}:")
+            for metric_name, value in metrics.items():
+                logger.info(f"  {metric_name}: {value:.4f}")
+
+        # Create train figures directory for final model
+        final_train_fig_dir = final_fig_dir / "train"
+        final_train_fig_dir.mkdir(parents=True, exist_ok=True)
+
+        # Plot final train results
+        plot_multitask_results(
+            predictions=final_train_predictions,
+            save_dir=final_train_fig_dir,
+            config=config,
+            title_prefix="Train Set (Final Model)",
+        )
+
+        # Save final train predictions
+        final_train_exp_preds, final_train_exp_targets = final_train_predictions["exp"]
+        save_detailed_predictions(
+            predictions=final_train_exp_preds,
+            targets=final_train_exp_targets,
+            save_path=run_dir / "train_predictions_exp_chi_final.csv",
+        )
+
+        final_train_sol_preds, final_train_sol_targets = final_train_predictions["sol"]
+        save_classification_predictions(
+            predictions_prob=final_train_sol_preds,
+            targets=final_train_sol_targets,
+            save_path=run_dir / "train_predictions_solubility_final.csv",
+            threshold=config.solubility.decision_threshold,
+        )
+
+        logger.info("=" * 80)
+        logger.info("Final model evaluation complete")
+        logger.info("=" * 80 + "\n")
+
+        # Reload best model for consistency
+        best_checkpoint = torch.load(run_dir / "checkpoints" / "best_model.pt", map_location=device)
+        model.load_state_dict(best_checkpoint["model_state_dict"])
+        logger.info("Reloaded best model")
+
+    except Exception as e:
+        logger.error(f"Failed to evaluate final model: {e}")
+        import traceback
+        traceback.print_exc()
 
     # Save final summary
     summary = {

@@ -67,6 +67,13 @@ def parse_args():
         default=None,
         help="Maximum epochs per fold. If not specified, uses config value.",
     )
+    parser.add_argument(
+        "--pretrained",
+        type=str,
+        default=None,
+        help="Path to pretrained model checkpoint (.pt file) from Stage 1 DFT pretraining. "
+             "If specified, initializes encoder and chi head with pretrained weights before each fold.",
+    )
     return parser.parse_args()
 
 
@@ -95,6 +102,8 @@ def train_fold(
         best_val_metrics: Dictionary of best validation metrics
         best_val_preds: Best validation predictions
         best_val_targets: Best validation targets
+        best_train_preds: Train predictions at best epoch
+        best_train_targets: Train targets at best epoch
     """
     # Setup optimizer
     optimizer_name = config.training.optimizer.lower()
@@ -123,6 +132,8 @@ def train_fold(
     best_val_metrics = None
     best_val_preds = None
     best_val_targets = None
+    best_train_preds = None
+    best_train_targets = None
     patience_counter = 0
     early_stopping_patience = config.training.early_stopping_patience
 
@@ -197,6 +208,25 @@ def train_fold(
             best_val_metrics = val_metrics
             best_val_preds = val_preds.numpy()
             best_val_targets = val_targets.numpy()
+
+            # Also compute train predictions at best epoch
+            model.eval()
+            train_preds_list, train_targets_list = [], []
+            with torch.no_grad():
+                for batch in train_loader:
+                    x = batch["x"].to(device)
+                    chi_true = batch["chi_exp"].to(device)
+                    temp = batch["temperature"].to(device)
+
+                    outputs = model(x, temperature=temp)
+                    chi_pred = outputs["chi"]
+
+                    train_preds_list.append(chi_pred.cpu())
+                    train_targets_list.append(chi_true.cpu())
+
+            best_train_preds = torch.cat(train_preds_list).numpy()
+            best_train_targets = torch.cat(train_targets_list).numpy()
+
             patience_counter = 0
         else:
             patience_counter += 1
@@ -206,7 +236,7 @@ def train_fold(
             logger.debug(f"  Early stopping at epoch {epoch}")
             break
 
-    return best_val_metrics, best_val_preds, best_val_targets
+    return best_val_metrics, best_val_preds, best_val_targets, best_train_preds, best_train_targets
 
 
 def main():
@@ -252,6 +282,17 @@ def main():
     logger.info(f"Device: {device}")
     logger.info(f"Random seed: {config.seed}")
 
+    # Log pretrained model info
+    if args.pretrained is not None:
+        pretrained_path = Path(args.pretrained)
+        if not pretrained_path.exists():
+            logger.error(f"Pretrained model not found: {pretrained_path}")
+            raise FileNotFoundError(f"Pretrained model not found: {pretrained_path}")
+        logger.info(f"Using pretrained model: {pretrained_path}")
+        logger.info("Each fold will initialize encoder + chi head with pretrained weights")
+    else:
+        logger.info("No pretrained model specified - training from scratch")
+
     # Save config
     save_config(config, run_dir / "config.yaml")
 
@@ -295,8 +336,10 @@ def main():
     logger.info("=" * 80)
 
     fold_results = []
-    all_fold_preds = []
-    all_fold_targets = []
+    all_fold_val_preds = []
+    all_fold_val_targets = []
+    all_fold_train_preds = []
+    all_fold_train_targets = []
 
     for fold_idx, (train_indices, val_indices) in enumerate(cv_splits):
         logger.info(f"\n{'=' * 80}")
@@ -331,26 +374,45 @@ def main():
 
         # Build model
         model = MultiTaskChiSolubilityModel(feature_dim, config)
+
+        # Load pretrained weights if specified
+        if args.pretrained is not None:
+            logger.info(f"  Loading pretrained encoder + chi head from {args.pretrained}")
+            model.load_encoder_and_chi_head(args.pretrained)
+        else:
+            logger.debug("  Training from scratch (no pretrained weights)")
+
         model = model.to(device)
 
         # Train fold
         logger.info("Training fold...")
-        best_val_metrics, best_val_preds, best_val_targets = train_fold(
+        best_val_metrics, best_val_preds, best_val_targets, best_train_preds, best_train_targets = train_fold(
             model, train_loader, val_loader, config, device, logger, max_epochs
+        )
+
+        # Compute train metrics
+        best_train_metrics = compute_metrics_regression(
+            torch.tensor(best_train_preds),
+            torch.tensor(best_train_targets)
         )
 
         # Log fold results
         logger.info(
-            f"Fold {fold_idx + 1} - Best Val MAE: {best_val_metrics['mae']:.4f}, "
-            f"RMSE: {best_val_metrics['rmse']:.4f}, "
-            f"R²: {best_val_metrics['r2']:.4f}"
+            f"Fold {fold_idx + 1} Results:\n"
+            f"  Train - MAE: {best_train_metrics['mae']:.4f}, "
+            f"RMSE: {best_train_metrics['rmse']:.4f}, R²: {best_train_metrics['r2']:.4f}\n"
+            f"  Val   - MAE: {best_val_metrics['mae']:.4f}, "
+            f"RMSE: {best_val_metrics['rmse']:.4f}, R²: {best_val_metrics['r2']:.4f}"
         )
 
-        # Save fold results
+        # Save fold results (including train metrics)
         fold_result = {
             "fold": fold_idx + 1,
             "n_train": len(train_subset),
             "n_val": len(val_subset),
+            "train_mae": best_train_metrics["mae"],
+            "train_rmse": best_train_metrics["rmse"],
+            "train_r2": best_train_metrics["r2"],
             "val_mae": best_val_metrics["mae"],
             "val_rmse": best_val_metrics["rmse"],
             "val_r2": best_val_metrics["r2"],
@@ -373,22 +435,54 @@ def main():
 
         # Plot parity for this fold
         fig, ax = plt.subplots(figsize=(4.5, 4.5))
-        ax.scatter(best_val_targets, best_val_preds, alpha=0.5, s=20, edgecolors='none')
+        ax.scatter(best_val_targets, best_val_preds, alpha=0.6, s=30, edgecolors='none')
         min_val = min(best_val_targets.min(), best_val_preds.min())
         max_val = max(best_val_targets.max(), best_val_preds.max())
-        ax.plot([min_val, max_val], [min_val, max_val], 'k--', lw=2, label='Perfect prediction')
-        ax.set_xlabel("True Chi (Experimental)", fontsize=12)
-        ax.set_ylabel("Predicted Chi", fontsize=12)
-        ax.set_title(f"Fold {fold_idx + 1} - Experimental Chi (MAE={best_val_metrics['mae']:.4f})", fontsize=14)
-        ax.legend()
+        ax.plot([min_val, max_val], [min_val, max_val], 'k--', lw=1.5, zorder=10)
+
+        # Add metrics text box (only MAE, RMSE, R²)
+        fold_metrics_text = (
+            f"MAE = {best_val_metrics['mae']:.4f}\n"
+            f"RMSE = {best_val_metrics['rmse']:.4f}\n"
+            f"R² = {best_val_metrics['r2']:.4f}"
+        )
+        ax.text(
+            0.05,
+            0.95,
+            fold_metrics_text,
+            transform=ax.transAxes,
+            verticalalignment="top",
+            bbox=dict(boxstyle="round", facecolor="white", alpha=0.8),
+            fontsize=10,
+        )
+
+        ax.set_xlabel(r"$\chi$ (True)", fontsize=12)
+        ax.set_ylabel(r"$\chi$ (Predicted)", fontsize=12)
+        ax.set_title(f"Fold {fold_idx + 1} - Experimental Chi (Validation)", fontsize=14)
         ax.set_aspect('equal', adjustable='box')
         plt.tight_layout()
         plt.savefig(fold_dir / "parity_plot.png", dpi=config.plotting.dpi, bbox_inches='tight')
         plt.close()
 
-        # Accumulate predictions for overall plot
-        all_fold_preds.append(best_val_preds)
-        all_fold_targets.append(best_val_targets)
+        # Accumulate predictions for aggregated plots (with fold indices)
+        all_fold_val_preds.append(best_val_preds)
+        all_fold_val_targets.append(best_val_targets)
+        all_fold_train_preds.append(best_train_preds)
+        all_fold_train_targets.append(best_train_targets)
+
+        # Track which fold each prediction came from
+        if fold_idx == 0:
+            all_fold_val_indices = np.full(len(best_val_preds), fold_idx + 1)
+            all_fold_train_indices = np.full(len(best_train_preds), fold_idx + 1)
+        else:
+            all_fold_val_indices = np.concatenate([
+                all_fold_val_indices,
+                np.full(len(best_val_preds), fold_idx + 1)
+            ])
+            all_fold_train_indices = np.concatenate([
+                all_fold_train_indices,
+                np.full(len(best_train_preds), fold_idx + 1)
+            ])
 
     # Compute aggregated metrics
     logger.info("\n" + "=" * 80)
@@ -399,29 +493,53 @@ def main():
     fold_results_df = pd.DataFrame(fold_results)
     fold_results_df.to_csv(run_dir / "fold_results.csv", index=False)
 
-    # Compute mean and std across folds
-    mean_mae = fold_results_df["val_mae"].mean()
-    std_mae = fold_results_df["val_mae"].std()
-    mean_rmse = fold_results_df["val_rmse"].mean()
-    std_rmse = fold_results_df["val_rmse"].std()
-    mean_r2 = fold_results_df["val_r2"].mean()
-    std_r2 = fold_results_df["val_r2"].std()
+    # Compute mean and std across folds (validation)
+    mean_val_mae = fold_results_df["val_mae"].mean()
+    std_val_mae = fold_results_df["val_mae"].std()
+    mean_val_rmse = fold_results_df["val_rmse"].mean()
+    std_val_rmse = fold_results_df["val_rmse"].std()
+    mean_val_r2 = fold_results_df["val_r2"].mean()
+    std_val_r2 = fold_results_df["val_r2"].std()
 
-    logger.info(f"MAE:  {mean_mae:.4f} ± {std_mae:.4f}")
-    logger.info(f"RMSE: {mean_rmse:.4f} ± {std_rmse:.4f}")
-    logger.info(f"R²:   {mean_r2:.4f} ± {std_r2:.4f}")
+    # Compute mean and std across folds (train)
+    mean_train_mae = fold_results_df["train_mae"].mean()
+    std_train_mae = fold_results_df["train_mae"].std()
+    mean_train_rmse = fold_results_df["train_rmse"].mean()
+    std_train_rmse = fold_results_df["train_rmse"].std()
+    mean_train_r2 = fold_results_df["train_r2"].mean()
+    std_train_r2 = fold_results_df["train_r2"].std()
 
-    # Save aggregated results
+    logger.info("\nValidation Set:")
+    logger.info(f"  MAE:  {mean_val_mae:.4f} ± {std_val_mae:.4f}")
+    logger.info(f"  RMSE: {mean_val_rmse:.4f} ± {std_val_rmse:.4f}")
+    logger.info(f"  R²:   {mean_val_r2:.4f} ± {std_val_r2:.4f}")
+
+    logger.info("\nTrain Set:")
+    logger.info(f"  MAE:  {mean_train_mae:.4f} ± {std_train_mae:.4f}")
+    logger.info(f"  RMSE: {mean_train_rmse:.4f} ± {std_train_rmse:.4f}")
+    logger.info(f"  R²:   {mean_train_r2:.4f} ± {std_train_r2:.4f}")
+
+    # Save aggregated results (with both train and validation metrics)
     aggregated_results = {
         "k_folds": k_folds,
         "n_total_samples": len(df_exp),
         "n_unique_polymers": df_exp["SMILES"].nunique(),
-        "mean_mae": float(mean_mae),
-        "std_mae": float(std_mae),
-        "mean_rmse": float(mean_rmse),
-        "std_rmse": float(std_rmse),
-        "mean_r2": float(mean_r2),
-        "std_r2": float(std_r2),
+        "validation": {
+            "mean_mae": float(mean_val_mae),
+            "std_mae": float(std_val_mae),
+            "mean_rmse": float(mean_val_rmse),
+            "std_rmse": float(std_val_rmse),
+            "mean_r2": float(mean_val_r2),
+            "std_r2": float(std_val_r2),
+        },
+        "train": {
+            "mean_mae": float(mean_train_mae),
+            "std_mae": float(std_train_mae),
+            "mean_rmse": float(mean_train_rmse),
+            "std_rmse": float(std_train_rmse),
+            "mean_r2": float(mean_train_r2),
+            "std_r2": float(std_train_r2),
+        },
         "fold_results": fold_results,
     }
 
@@ -430,26 +548,119 @@ def main():
 
     logger.info(f"\nCV summary saved to {run_dir / 'cv_summary.json'}")
 
-    # Plot aggregated parity (all folds combined)
-    all_fold_preds = np.concatenate(all_fold_preds)
-    all_fold_targets = np.concatenate(all_fold_targets)
+    # Plot aggregated validation parity (all folds combined with different colors)
+    all_fold_val_preds = np.concatenate(all_fold_val_preds)
+    all_fold_val_targets = np.concatenate(all_fold_val_targets)
 
-    fig, ax = plt.subplots(figsize=(4.5, 4.5))
-    ax.scatter(all_fold_targets, all_fold_preds, alpha=0.5, s=20, edgecolors='none')
-    min_val = min(all_fold_targets.min(), all_fold_preds.min())
-    max_val = max(all_fold_targets.max(), all_fold_preds.max())
-    ax.plot([min_val, max_val], [min_val, max_val], 'k--', lw=2, label='Perfect prediction')
-    ax.set_xlabel("True Chi (Experimental)", fontsize=12)
-    ax.set_ylabel("Predicted Chi", fontsize=12)
-    ax.set_title(
-        f"{k_folds}-Fold CV - Experimental Chi\n(MAE={mean_mae:.4f}±{std_mae:.4f})",
-        fontsize=14
+    # Compute overall metrics for all validation data
+    from src.evaluation.metrics import compute_regression_metrics
+    overall_val_metrics = compute_regression_metrics(
+        torch.tensor(all_fold_val_preds),
+        torch.tensor(all_fold_val_targets)
     )
-    ax.legend()
+
+    fig, ax = plt.subplots(figsize=(6, 6))
+
+    # Plot each fold with different color
+    cmap = plt.cm.get_cmap('tab10')  # Up to 10 distinct colors
+    for fold_i in range(1, k_folds + 1):
+        fold_mask = all_fold_val_indices == fold_i
+        ax.scatter(
+            all_fold_val_targets[fold_mask],
+            all_fold_val_preds[fold_mask],
+            alpha=0.6,
+            s=30,
+            c=[cmap(fold_i - 1)],
+            label=f'Fold {fold_i}',
+            edgecolors='none'
+        )
+
+    # y=x reference line (no label)
+    min_val = min(all_fold_val_targets.min(), all_fold_val_preds.min())
+    max_val = max(all_fold_val_targets.max(), all_fold_val_preds.max())
+    ax.plot([min_val, max_val], [min_val, max_val], 'k--', lw=1.5, zorder=10)
+
+    # Add metrics text box (only MAE, RMSE, R²)
+    val_metrics_text = (
+        f"MAE = {overall_val_metrics['mae']:.4f}\n"
+        f"RMSE = {overall_val_metrics['rmse']:.4f}\n"
+        f"R² = {overall_val_metrics['r2']:.4f}"
+    )
+    ax.text(
+        0.05,
+        0.95,
+        val_metrics_text,
+        transform=ax.transAxes,
+        verticalalignment="top",
+        bbox=dict(boxstyle="round", facecolor="white", alpha=0.8),
+        fontsize=11,
+    )
+
+    ax.set_xlabel(r"$\chi$ (True)", fontsize=12)
+    ax.set_ylabel(r"$\chi$ (Predicted)", fontsize=12)
+    ax.set_title(f"{k_folds}-Fold CV - Experimental Chi (Validation Set)", fontsize=14)
+    ax.legend(loc='lower right', fontsize=9)
     ax.set_aspect('equal', adjustable='box')
     plt.tight_layout()
-    plt.savefig(run_dir / "parity_plot_all_folds.png", dpi=config.plotting.dpi, bbox_inches='tight')
+    plt.savefig(run_dir / "parity_plot_validation.png", dpi=config.plotting.dpi, bbox_inches='tight')
     plt.close()
+    logger.info(f"Saved aggregated validation parity plot")
+
+    # Plot aggregated train parity (all folds combined with different colors)
+    all_fold_train_preds = np.concatenate(all_fold_train_preds)
+    all_fold_train_targets = np.concatenate(all_fold_train_targets)
+
+    # Compute overall metrics for all train data
+    overall_train_metrics = compute_regression_metrics(
+        torch.tensor(all_fold_train_preds),
+        torch.tensor(all_fold_train_targets)
+    )
+
+    fig, ax = plt.subplots(figsize=(6, 6))
+
+    # Plot each fold with different color
+    for fold_i in range(1, k_folds + 1):
+        fold_mask = all_fold_train_indices == fold_i
+        ax.scatter(
+            all_fold_train_targets[fold_mask],
+            all_fold_train_preds[fold_mask],
+            alpha=0.6,
+            s=30,
+            c=[cmap(fold_i - 1)],
+            label=f'Fold {fold_i}',
+            edgecolors='none'
+        )
+
+    # y=x reference line (no label)
+    min_val = min(all_fold_train_targets.min(), all_fold_train_preds.min())
+    max_val = max(all_fold_train_targets.max(), all_fold_train_preds.max())
+    ax.plot([min_val, max_val], [min_val, max_val], 'k--', lw=1.5, zorder=10)
+
+    # Add metrics text box (only MAE, RMSE, R²)
+    train_metrics_text = (
+        f"MAE = {overall_train_metrics['mae']:.4f}\n"
+        f"RMSE = {overall_train_metrics['rmse']:.4f}\n"
+        f"R² = {overall_train_metrics['r2']:.4f}"
+    )
+    ax.text(
+        0.05,
+        0.95,
+        train_metrics_text,
+        transform=ax.transAxes,
+        verticalalignment="top",
+        bbox=dict(boxstyle="round", facecolor="white", alpha=0.8),
+        fontsize=11,
+    )
+
+    ax.set_xlabel(r"$\chi$ (True)", fontsize=12)
+    ax.set_ylabel(r"$\chi$ (Predicted)", fontsize=12)
+    ax.set_title(f"{k_folds}-Fold CV - Experimental Chi (Train Set)", fontsize=14)
+    ax.legend(loc='lower right', fontsize=9)
+    ax.set_aspect('equal', adjustable='box')
+    plt.tight_layout()
+    plt.savefig(run_dir / "parity_plot_train.png", dpi=config.plotting.dpi, bbox_inches='tight')
+    plt.close()
+    logger.info(f"Saved aggregated train parity plot")
 
     # Plot CV metrics across folds
     fig, axes = plt.subplots(1, 3, figsize=(18, 5))
