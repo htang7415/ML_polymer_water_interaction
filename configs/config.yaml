@@ -177,7 +177,7 @@ cv:
 # ============================================================================
 uncertainty:
   # Number of forward passes for MC Dropout
-  mc_dropout_samples: 50
+  mc_dropout_samples: 150
 
   # Keep dropout active during inference
   enable_mc_dropout: true
