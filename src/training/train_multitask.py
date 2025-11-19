@@ -940,7 +940,7 @@ def main():
         dft_mc_results = mc_predict_batch(
             model=model,
             dataloader=test_loaders["dft"],
-            T_ref=config.data.reference_temperature,
+            T_ref=config.model.T_ref_K,
             n_samples=config.uncertainty.mc_dropout_samples,
             device=device,
             predict_solubility=False,
@@ -954,7 +954,7 @@ def main():
         exp_mc_results = mc_predict_batch(
             model=model,
             dataloader=test_loaders["exp"],
-            T_ref=config.data.reference_temperature,
+            T_ref=config.model.T_ref_K,
             n_samples=config.uncertainty.mc_dropout_samples,
             device=device,
             predict_solubility=False,

@@ -145,7 +145,7 @@ def mc_predict_batch(
     n_samples: int = 50,
     device: str = "cuda",
     predict_solubility: bool = False,
-) -> Dict[str, Tuple[np.ndarray, np.ndarray]]:
+) -> Dict[str, np.ndarray]:
     """
     Perform MC Dropout prediction for entire dataset using DataLoader.
 
@@ -158,9 +158,17 @@ def mc_predict_batch(
         predict_solubility: If True, also predict solubility
 
     Returns:
-        Dictionary containing for each output:
-            - (mean, std) tuples as numpy arrays with shape (n_total_samples,)
-        Keys: 'chi_RT', 'A', 'B', and optionally 'p_soluble'
+        Dictionary containing:
+            - chi_mean: Mean chi predictions at T_ref
+            - chi_std: Std of chi predictions
+            - chi_true: True chi values (if available in dataloader)
+            - A_mean: Mean A parameter predictions
+            - A_std: Std of A parameter predictions
+            - B_mean: Mean B parameter predictions
+            - B_std: Std of B parameter predictions
+            - temperatures: Temperature values (if available)
+            - smiles: SMILES strings (if available)
+            - (optional) p_soluble_mean, p_soluble_std if predict_solubility=True
 
     Example:
         >>> from torch.utils.data import DataLoader, TensorDataset
@@ -169,7 +177,8 @@ def mc_predict_batch(
         >>> predictions = mc_predict_batch(
         ...     model, loader, T_ref=298.0, n_samples=50
         ... )
-        >>> chi_mean, chi_std = predictions['chi_RT']
+        >>> chi_mean = predictions['chi_mean']
+        >>> chi_std = predictions['chi_std']
     """
     # Ensure model is in eval mode first
     model.eval()
@@ -185,6 +194,11 @@ def mc_predict_batch(
     all_B_mean = []
     all_B_std = []
 
+    # Storage for true values and metadata
+    all_chi_true = []
+    all_temperatures = []
+    all_smiles = []
+
     if predict_solubility:
         all_p_soluble_mean = []
         all_p_soluble_std = []
@@ -192,9 +206,27 @@ def mc_predict_batch(
     # Process batches
     for batch in dataloader:
         # Handle different dataloader formats
-        if isinstance(batch, (list, tuple)):
+        if isinstance(batch, dict):
+            # Dict format from custom collate functions
+            x_batch = batch["x"]
+            # Collect true values and metadata if available
+            if "chi_dft" in batch:
+                all_chi_true.append(batch["chi_dft"].cpu().numpy())
+            elif "chi_exp" in batch:
+                all_chi_true.append(batch["chi_exp"].cpu().numpy())
+            if "temperature" in batch:
+                all_temperatures.append(batch["temperature"].cpu().numpy())
+            if "smiles" in batch:
+                all_smiles.extend(batch["smiles"])
+        elif isinstance(batch, (list, tuple)):
+            # Tuple format: (x, y, ...)
             x_batch = batch[0]
+            if len(batch) > 1:
+                all_chi_true.append(batch[1].cpu().numpy())
+            if len(batch) > 2:
+                all_temperatures.append(batch[2].cpu().numpy())
         else:
+            # Just tensor
             x_batch = batch
 
         # Get predictions for this batch
@@ -227,27 +259,27 @@ def mc_predict_batch(
 
     # Concatenate all batches
     results = {
-        "chi_RT": (
-            np.concatenate(all_chi_RT_mean),
-            np.concatenate(all_chi_RT_std),
-        ),
-        "A": (
-            np.concatenate(all_A_mean),
-            np.concatenate(all_A_std),
-        ),
-        "B": (
-            np.concatenate(all_B_mean),
-            np.concatenate(all_B_std),
-        ),
+        "chi_mean": np.concatenate(all_chi_RT_mean),
+        "chi_std": np.concatenate(all_chi_RT_std),
+        "A_mean": np.concatenate(all_A_mean),
+        "A_std": np.concatenate(all_A_std),
+        "B_mean": np.concatenate(all_B_mean),
+        "B_std": np.concatenate(all_B_std),
     }
 
-    if predict_solubility:
-        results["p_soluble"] = (
-            np.concatenate(all_p_soluble_mean),
-            np.concatenate(all_p_soluble_std),
-        )
+    # Add true values and metadata if collected
+    if all_chi_true:
+        results["chi_true"] = np.concatenate(all_chi_true)
+    if all_temperatures:
+        results["temperatures"] = np.concatenate(all_temperatures)
+    if all_smiles:
+        results["smiles"] = all_smiles
 
-    n_total = len(results["chi_RT"][0])
+    if predict_solubility:
+        results["p_soluble_mean"] = np.concatenate(all_p_soluble_mean)
+        results["p_soluble_std"] = np.concatenate(all_p_soluble_std)
+
+    n_total = len(results["chi_mean"])
     logger.info(
         f"MC Dropout batch prediction completed for {n_total} samples "
         f"with {n_samples} forward passes each"
