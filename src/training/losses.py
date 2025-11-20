@@ -28,12 +28,16 @@ def chi_dft_loss(
     temperature: Optional[torch.Tensor] = None,
     T_ref: Optional[float] = None,
     mask: Optional[torch.Tensor] = None,
+    normalizer: Optional['ChiNormalizer'] = None,
 ) -> torch.Tensor:
     """
     MSE loss for DFT chi prediction at given temperature(s).
 
     Computes chi_pred = A/T + B and compares with chi_true.
     Can use either a tensor of temperatures (one per sample) or a single T_ref float.
+
+    Implements Approach B: A and B remain physical parameters, normalization
+    is applied only during loss calculation for better gradient flow.
 
     Args:
         A: Predicted temperature coefficient, shape (batch_size,)
@@ -42,14 +46,15 @@ def chi_dft_loss(
         temperature: Temperature tensor for each sample, shape (batch_size,). Takes precedence if provided.
         T_ref: Single reference temperature (float). Used if temperature is None. Defaults to 298.0.
         mask: Optional boolean mask for valid samples, shape (batch_size,)
+        normalizer: Optional ChiNormalizer for Approach B normalization
 
     Returns:
         loss: Mean squared error loss (scalar)
 
     Example:
-        >>> # Using per-sample temperatures
-        >>> loss = chi_dft_loss(A, B, chi_true, temperature=temp_tensor)
-        >>> # Using single reference temperature
+        >>> # Using per-sample temperatures with normalization
+        >>> loss = chi_dft_loss(A, B, chi_true, temperature=temp_tensor, normalizer=normalizer)
+        >>> # Using single reference temperature without normalization
         >>> loss = chi_dft_loss(A, B, chi_true, T_ref=298.0)
     """
     # Determine which temperature to use
@@ -63,7 +68,7 @@ def chi_dft_loss(
         # Default to 298 K
         T = 298.0
 
-    # Compute predicted chi at temperature(s)
+    # Compute predicted chi at temperature(s) - A and B remain physical
     chi_pred = A / T + B
 
     # Apply mask if provided
@@ -71,8 +76,14 @@ def chi_dft_loss(
         chi_pred = chi_pred[mask]
         chi_true = chi_true[mask]
 
-    # MSE loss
-    loss = F.mse_loss(chi_pred, chi_true)
+    # Approach B: Normalize only for loss calculation
+    if normalizer is not None:
+        chi_pred_norm = normalizer.transform(chi_pred)
+        chi_true_norm = normalizer.transform(chi_true)
+        loss = F.mse_loss(chi_pred_norm, chi_true_norm)
+    else:
+        # Original: no normalization
+        loss = F.mse_loss(chi_pred, chi_true)
 
     return loss
 
@@ -83,11 +94,15 @@ def chi_exp_loss(
     chi_true: torch.Tensor,
     temperature: torch.Tensor,
     mask: Optional[torch.Tensor] = None,
+    normalizer: Optional['ChiNormalizer'] = None,
 ) -> torch.Tensor:
     """
     MSE loss for experimental chi prediction at given temperatures.
 
     Computes chi_pred = A/T + B for each sample's temperature and compares with chi_true.
+
+    Implements Approach B: A and B remain physical parameters, normalization
+    is applied only during loss calculation for better gradient flow.
 
     Args:
         A: Predicted temperature coefficient, shape (batch_size,)
@@ -95,14 +110,18 @@ def chi_exp_loss(
         chi_true: True experimental chi values, shape (batch_size,)
         temperature: Temperature in Kelvin for each sample, shape (batch_size,)
         mask: Optional boolean mask for valid samples, shape (batch_size,)
+        normalizer: Optional ChiNormalizer for Approach B normalization
 
     Returns:
         loss: Mean squared error loss (scalar)
 
     Example:
+        >>> # With normalization
+        >>> loss = chi_exp_loss(A, B, chi_true, temperature, normalizer=normalizer)
+        >>> # Without normalization
         >>> loss = chi_exp_loss(A, B, chi_true, temperature)
     """
-    # Compute predicted chi at given temperatures
+    # Compute predicted chi at given temperatures - A and B remain physical
     chi_pred = A / temperature + B
 
     # Apply mask if provided
@@ -110,8 +129,14 @@ def chi_exp_loss(
         chi_pred = chi_pred[mask]
         chi_true = chi_true[mask]
 
-    # MSE loss
-    loss = F.mse_loss(chi_pred, chi_true)
+    # Approach B: Normalize only for loss calculation
+    if normalizer is not None:
+        chi_pred_norm = normalizer.transform(chi_pred)
+        chi_true_norm = normalizer.transform(chi_true)
+        loss = F.mse_loss(chi_pred_norm, chi_true_norm)
+    else:
+        # Original: no normalization
+        loss = F.mse_loss(chi_pred, chi_true)
 
     return loss
 
@@ -174,6 +199,8 @@ def multitask_loss(
     class_weight_pos: float = 2.0,
     class_weight_neg: float = 1.0,
     T_ref: float = 298.0,
+    dft_normalizer: Optional['ChiNormalizer'] = None,
+    exp_normalizer: Optional['ChiNormalizer'] = None,
 ) -> Tuple[torch.Tensor, Dict[str, float]]:
     """
     Combined multi-task loss for DFT chi + experimental chi + solubility.
@@ -194,6 +221,8 @@ def multitask_loss(
         class_weight_pos: Weight for positive class in solubility
         class_weight_neg: Weight for negative class in solubility
         T_ref: Reference temperature for DFT chi
+        dft_normalizer: Optional ChiNormalizer for DFT chi (Approach B)
+        exp_normalizer: Optional ChiNormalizer for experimental chi (Approach B)
 
     Returns:
         total_loss: Weighted sum of task losses (scalar)
@@ -233,7 +262,7 @@ def multitask_loss(
         mask_dft = ~torch.isnan(chi_dft_true)
 
         if mask_dft.any():
-            loss_dft = chi_dft_loss(A, B, chi_dft_true, T_ref=T_ref, mask=mask_dft)
+            loss_dft = chi_dft_loss(A, B, chi_dft_true, T_ref=T_ref, mask=mask_dft, normalizer=dft_normalizer)
             total_loss = total_loss + lambda_dft * loss_dft
             loss_dict["loss_dft"] = loss_dft.item()
         else:
@@ -245,7 +274,7 @@ def multitask_loss(
         mask_exp = ~torch.isnan(chi_exp_true)
 
         if mask_exp.any():
-            loss_exp = chi_exp_loss(A, B, chi_exp_true, temperature_exp, mask=mask_exp)
+            loss_exp = chi_exp_loss(A, B, chi_exp_true, temperature_exp, mask=mask_exp, normalizer=exp_normalizer)
             total_loss = total_loss + lambda_exp * loss_exp
             loss_dict["loss_exp"] = loss_exp.item()
         else:

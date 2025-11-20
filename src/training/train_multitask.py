@@ -36,6 +36,7 @@ from src.data.datasets import (
     collate_solubility,
 )
 from src.data.featurization import PolymerFeaturizer
+from src.data.normalizers import ChiNormalizer
 from src.data.splits import create_dft_splits, create_solubility_splits, create_exp_chi_splits
 from src.evaluation.analysis import (
     save_detailed_predictions,
@@ -104,7 +105,7 @@ def parse_args():
 def load_and_prepare_data(
     config: Config,
     logger,
-) -> Tuple[dict, dict, dict, int]:
+) -> Tuple[dict, dict, dict, int, ChiNormalizer, ChiNormalizer]:
     """
     Load all datasets (DFT, exp chi, solubility), featurize, and create dataloaders.
 
@@ -117,6 +118,8 @@ def load_and_prepare_data(
         val_loaders: Dict of validation dataloaders
         test_loaders: Dict of test dataloaders
         feature_dim: Feature dimensionality
+        dft_normalizer: Fitted ChiNormalizer for DFT chi values
+        exp_normalizer: Fitted ChiNormalizer for experimental chi values
     """
     logger.info("=" * 80)
     logger.info("Loading and preparing multi-task data")
@@ -302,7 +305,22 @@ def load_and_prepare_data(
     logger.info(f"Val batches - Exp: {len(val_exp_loader)}, Sol: {len(val_sol_loader)}")
     logger.info(f"Test batches - Exp: {len(test_exp_loader)}, Sol: {len(test_sol_loader)}")
 
-    return train_loaders, val_loaders, test_loaders, feature_dim
+    # Create and fit normalizers on training data
+    logger.info("\nCreating chi normalizers...")
+
+    # DFT normalizer
+    dft_normalizer = ChiNormalizer(method='standardize')
+    train_dft_chi = train_dft_df['chi'].values
+    dft_normalizer.fit(train_dft_chi)
+    logger.info(f"DFT chi normalizer: mean={dft_normalizer.mean:.4f}, std={dft_normalizer.std:.4f}")
+
+    # Experimental chi normalizer
+    exp_normalizer = ChiNormalizer(method='standardize')
+    train_exp_chi = train_exp_df['chi'].values
+    exp_normalizer.fit(train_exp_chi)
+    logger.info(f"Exp chi normalizer: mean={exp_normalizer.mean:.4f}, std={exp_normalizer.std:.4f}")
+
+    return train_loaders, val_loaders, test_loaders, feature_dim, dft_normalizer, exp_normalizer
 
 
 def train_epoch(
@@ -312,6 +330,8 @@ def train_epoch(
     config: Config,
     device: torch.device,
     logger,
+    dft_normalizer: ChiNormalizer = None,
+    exp_normalizer: ChiNormalizer = None,
 ) -> Dict[str, float]:
     """
     Train for one epoch on all tasks.
@@ -323,6 +343,8 @@ def train_epoch(
         config: Configuration
         device: Device to use
         logger: Logger instance
+        dft_normalizer: ChiNormalizer for DFT chi (Approach B)
+        exp_normalizer: ChiNormalizer for experimental chi (Approach B)
 
     Returns:
         Dictionary of epoch metrics
@@ -361,7 +383,8 @@ def train_epoch(
             outputs,
             chi_exp_true=chi_exp,
             temperature_exp=temp_exp,
-            config=config
+            config=config,
+            exp_normalizer=exp_normalizer
         )
         batch_loss += loss_exp
         task_losses["exp"] += loss_exp.item()
@@ -669,7 +692,7 @@ def main():
     save_config(config, run_dir / "config.yaml")
 
     # Load and prepare data
-    train_loaders, val_loaders, test_loaders, feature_dim = load_and_prepare_data(config, logger)
+    train_loaders, val_loaders, test_loaders, feature_dim, dft_normalizer, exp_normalizer = load_and_prepare_data(config, logger)
 
     # Build model
     logger.info("=" * 80)
@@ -784,7 +807,7 @@ def main():
         logger.info("-" * 80)
 
         # Train
-        train_metrics = train_epoch(model, train_loaders, optimizer, config, device, logger)
+        train_metrics = train_epoch(model, train_loaders, optimizer, config, device, logger, dft_normalizer, exp_normalizer)
 
         logger.info(
             f"Train - Total Loss: {train_metrics['loss']:.4f}, "

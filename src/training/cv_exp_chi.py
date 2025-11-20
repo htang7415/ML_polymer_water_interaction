@@ -28,6 +28,7 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 
 from src.data.datasets import ExpChiDataset, collate_exp_chi
 from src.data.featurization import PolymerFeaturizer
+from src.data.normalizers import ChiNormalizer
 from src.data.splits import create_exp_chi_cv_splits
 from src.evaluation.analysis import save_detailed_predictions
 from src.models.multitask_model import MultiTaskChiSolubilityModel
@@ -85,7 +86,8 @@ def train_fold(
     device: torch.device,
     logger,
     max_epochs: int,
-) -> Tuple[Dict[str, float], np.ndarray, np.ndarray]:
+    normalizer: ChiNormalizer = None,
+) -> Tuple[Dict[str, float], np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """
     Train model for one fold.
 
@@ -96,6 +98,7 @@ def train_fold(
         config: Configuration
         device: Device to use
         logger: Logger instance
+        normalizer: ChiNormalizer for Approach B normalization (optional)
         max_epochs: Maximum number of epochs
 
     Returns:
@@ -152,7 +155,7 @@ def train_fold(
             A, B = outputs["A"], outputs["B"]
 
             # Compute loss
-            loss = chi_exp_loss(A, B, chi_true, temp)
+            loss = chi_exp_loss(A, B, chi_true, temp, normalizer=normalizer)
 
             # Backward pass
             optimizer.zero_grad()
@@ -185,7 +188,7 @@ def train_fold(
                 A, B = outputs["A"], outputs["B"]
                 chi_pred = outputs["chi"]
 
-                loss = chi_exp_loss(A, B, chi_true, temp)
+                loss = chi_exp_loss(A, B, chi_true, temp, normalizer=normalizer)
                 val_loss += loss.item()
 
                 val_preds.append(chi_pred.cpu())
@@ -372,6 +375,12 @@ def main():
 
         logger.info(f"Train: {len(train_subset)} samples, Val: {len(val_subset)} samples")
 
+        # Create and fit normalizer on THIS FOLD's training data
+        exp_normalizer = ChiNormalizer(method='standardize')
+        train_chi_values = df_exp.iloc[train_indices]['chi'].values
+        exp_normalizer.fit(train_chi_values)
+        logger.info(f"Exp chi normalizer fitted: mean={exp_normalizer.mean:.4f}, std={exp_normalizer.std:.4f}")
+
         # Build model
         model = MultiTaskChiSolubilityModel(feature_dim, config)
 
@@ -384,10 +393,19 @@ def main():
 
         model = model.to(device)
 
+        # Freeze encoder if specified in config
+        if config.training.get("freeze_encoder_stage2", False):
+            logger.info("  Freezing encoder parameters")
+            model.freeze_encoder()
+            # Log trainable params
+            trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+            total = sum(p.numel() for p in model.parameters())
+            logger.info(f"  Trainable params: {trainable:,} / {total:,}")
+
         # Train fold
         logger.info("Training fold...")
         best_val_metrics, best_val_preds, best_val_targets, best_train_preds, best_train_targets = train_fold(
-            model, train_loader, val_loader, config, device, logger, max_epochs
+            model, train_loader, val_loader, config, device, logger, max_epochs, normalizer=exp_normalizer
         )
 
         # Compute train metrics

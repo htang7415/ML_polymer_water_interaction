@@ -29,6 +29,7 @@ sys.path.append(str(Path(__file__).parent.parent.parent))
 
 from src.data.datasets import DFTChiDataset, collate_dft_chi
 from src.data.featurization import PolymerFeaturizer
+from src.data.normalizers import ChiNormalizer
 from src.data.splits import create_dft_splits
 from src.evaluation.analysis import save_detailed_predictions
 from src.evaluation.plots import (
@@ -77,7 +78,7 @@ def parse_args():
 def load_and_prepare_data(
     config: Config,
     logger,
-) -> Tuple[DataLoader, DataLoader, DataLoader, int]:
+) -> Tuple[DataLoader, DataLoader, DataLoader, int, ChiNormalizer]:
     """
     Load DFT data, featurize, and create train/val/test dataloaders.
 
@@ -90,6 +91,7 @@ def load_and_prepare_data(
         val_loader: Validation dataloader
         test_loader: Test dataloader
         feature_dim: Feature dimensionality
+        dft_normalizer: Fitted ChiNormalizer for DFT chi values
     """
     logger.info("=" * 80)
     logger.info("Loading and preparing DFT chi data")
@@ -158,7 +160,14 @@ def load_and_prepare_data(
     logger.info(f"Train batches: {len(train_loader)}, Val batches: {len(val_loader)}, "
                 f"Test batches: {len(test_loader)}")
 
-    return train_loader, val_loader, test_loader, feature_dim
+    # Create and fit normalizer on training chi values
+    logger.info("Creating chi normalizer...")
+    dft_normalizer = ChiNormalizer(method='standardize')
+    train_chi_values = train_df['chi'].values
+    dft_normalizer.fit(train_chi_values)
+    logger.info(f"DFT chi normalizer fitted: mean={dft_normalizer.mean:.4f}, std={dft_normalizer.std:.4f}")
+
+    return train_loader, val_loader, test_loader, feature_dim, dft_normalizer
 
 
 def train_epoch(
@@ -169,6 +178,7 @@ def train_epoch(
     device: torch.device,
     logger,
     scaler: GradScaler = None,
+    normalizer: ChiNormalizer = None,
 ) -> Dict[str, float]:
     """
     Train for one epoch.
@@ -181,6 +191,7 @@ def train_epoch(
         device: Device to use
         logger: Logger instance
         scaler: GradScaler for mixed precision training (optional)
+        normalizer: ChiNormalizer for Approach B normalization (optional)
 
     Returns:
         Dictionary of epoch metrics
@@ -208,7 +219,7 @@ def train_epoch(
             with autocast():
                 outputs = model(x, temperature=temperature)
                 A, B = outputs["A"], outputs["B"]
-                loss = chi_dft_loss(A, B, chi_true, temperature=temperature)
+                loss = chi_dft_loss(A, B, chi_true, temperature=temperature, normalizer=normalizer)
 
             # Backward pass with scaler
             scaler.scale(loss).backward()
@@ -226,7 +237,7 @@ def train_epoch(
             # Standard training (no mixed precision)
             outputs = model(x, temperature=temperature)
             A, B = outputs["A"], outputs["B"]
-            loss = chi_dft_loss(A, B, chi_true, temperature=temperature)
+            loss = chi_dft_loss(A, B, chi_true, temperature=temperature, normalizer=normalizer)
 
             # Backward pass
             loss.backward()
@@ -266,6 +277,7 @@ def validate(
     config: Config,
     device: torch.device,
     return_detailed: bool = False,
+    normalizer: ChiNormalizer = None,
 ) -> Tuple[Dict[str, float], np.ndarray, np.ndarray]:
     """
     Validate model.
@@ -276,6 +288,7 @@ def validate(
         config: Configuration
         device: Device to use
         return_detailed: If True, return additional data (A, B, T, SMILES)
+        normalizer: ChiNormalizer for Approach B normalization (optional)
 
     Returns:
         If return_detailed=False:
@@ -313,7 +326,7 @@ def validate(
         A, B = outputs["A"], outputs["B"]
 
         # Compute loss with actual temperatures
-        loss = chi_dft_loss(A, B, chi_true, temperature=temperature)
+        loss = chi_dft_loss(A, B, chi_true, temperature=temperature, normalizer=normalizer)
 
         # Track metrics
         total_loss += loss.item()
@@ -441,7 +454,7 @@ def main():
     logger.info(f"Saved configuration to {run_dir / 'config.yaml'}")
 
     # Load and prepare data
-    train_loader, val_loader, test_loader, feature_dim = load_and_prepare_data(config, logger)
+    train_loader, val_loader, test_loader, feature_dim, dft_normalizer = load_and_prepare_data(config, logger)
 
     # Build model
     logger.info("=" * 80)
@@ -531,7 +544,7 @@ def main():
         logger.info("-" * 80)
 
         # Train
-        train_metrics = train_epoch(model, train_loader, optimizer, config, device, logger, scaler)
+        train_metrics = train_epoch(model, train_loader, optimizer, config, device, logger, scaler, normalizer=dft_normalizer)
 
         logger.info(
             f"Train - Loss: {train_metrics['loss']:.4f}, "
@@ -541,7 +554,7 @@ def main():
         )
 
         # Validate
-        val_metrics, val_preds, val_targets = validate(model, val_loader, config, device)
+        val_metrics, val_preds, val_targets = validate(model, val_loader, config, device, normalizer=dft_normalizer)
 
         logger.info(
             f"Val   - Loss: {val_metrics['loss']:.4f}, "
@@ -636,7 +649,7 @@ def main():
 
     # Get basic metrics for logging
     train_metrics, _, _ = validate(
-        model, train_loader, config, device, return_detailed=False
+        model, train_loader, config, device, return_detailed=False, normalizer=dft_normalizer
     )
 
     logger.info(
@@ -702,7 +715,7 @@ def main():
 
     # Get basic metrics for logging
     test_metrics, _, _ = validate(
-        model, test_loader, config, device, return_detailed=False
+        model, test_loader, config, device, return_detailed=False, normalizer=dft_normalizer
     )
 
     logger.info(

@@ -26,6 +26,7 @@ from src.data.datasets import (
     collate_solubility,
 )
 from src.data.featurization import PolymerFeaturizer
+from src.data.normalizers import ChiNormalizer
 from src.data.splits import create_exp_chi_splits, create_solubility_splits
 from src.models.multitask_model import MultiTaskChiSolubilityModel
 from src.training.losses import (
@@ -44,6 +45,8 @@ def train_epoch_quick(
     optimizer: torch.optim.Optimizer,
     config: Config,
     device: torch.device,
+    dft_normalizer: Optional[ChiNormalizer] = None,
+    exp_normalizer: Optional[ChiNormalizer] = None,
 ) -> float:
     """Quick training epoch (minimal logging)."""
     model.train()
@@ -70,7 +73,7 @@ def train_epoch_quick(
 
         outputs = model(x_exp, temperature=temp_exp)
         loss_exp, _ = multitask_loss(
-            outputs, chi_exp_true=chi_exp, temperature_exp=temp_exp, config=config
+            outputs, chi_exp_true=chi_exp, temperature_exp=temp_exp, config=config, exp_normalizer=exp_normalizer
         )
         batch_loss += loss_exp
         n_tasks += 1
@@ -239,6 +242,14 @@ def train_multitask_quick(
                          shuffle=False, collate_fn=collate_solubility),
     }
 
+    # Create normalizers for chi values (Approach B: normalize in loss only)
+    exp_normalizer = ChiNormalizer(method='standardize')
+    train_exp_chi = train_exp_df['chi'].values
+    exp_normalizer.fit(train_exp_chi)
+
+    # Note: DFT normalizer not used in Stage 2 (quick training), but kept for consistency
+    dft_normalizer = None
+
     # Build model
     model = MultiTaskChiSolubilityModel(feature_dim, config)
     model.load_encoder_and_chi_head(pretrained_path)
@@ -271,7 +282,7 @@ def train_multitask_quick(
     iterator = tqdm(range(num_epochs), desc="Quick training") if verbose else range(num_epochs)
 
     for epoch in iterator:
-        train_loss = train_epoch_quick(model, train_loaders, optimizer, config, device)
+        train_loss = train_epoch_quick(model, train_loaders, optimizer, config, device, dft_normalizer, exp_normalizer)
         val_metrics = validate_quick(model, val_loaders, config, device)
 
         val_loss = val_metrics["exp_mae"] + (1.0 - val_metrics["sol_f1"])

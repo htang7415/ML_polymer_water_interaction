@@ -285,9 +285,11 @@ def create_exp_chi_cv_splits(
     Create k-fold cross-validation splits for experimental chi data at SMILES level.
 
     All measurements for a given SMILES go into the same fold.
+    Uses stratification by chi value ranges to ensure each fold has balanced
+    representation of low/mid/high chi polymers.
 
     Args:
-        df: DataFrame with experimental chi data (must have 'SMILES' column)
+        df: DataFrame with experimental chi data (must have 'SMILES' and 'chi' columns)
         config: Configuration object
 
     Returns:
@@ -315,12 +317,29 @@ def create_exp_chi_cv_splits(
         )
         k_folds = n_unique
 
-    # Create KFold splitter
-    kfold = KFold(n_splits=k_folds, shuffle=shuffle, random_state=seed if shuffle else None)
+    # Compute mean chi per SMILES for stratification
+    smiles_to_chi_mean = df.groupby("SMILES")["chi"].mean()
 
-    # Generate splits at SMILES level
+    # Create chi bins for stratification
+    # Low: chi < 0.6 (hydrophilic), Mid: 0.6-2.0, High: chi >= 2.0 (hydrophobic)
+    chi_bins = pd.cut(
+        smiles_to_chi_mean,
+        bins=[-np.inf, 0.6, 2.0, np.inf],
+        labels=[0, 1, 2]
+    ).astype(int)
+
+    logger.info(
+        f"Chi stratification: Low (<0.6): {(chi_bins==0).sum()}, "
+        f"Mid (0.6-2.0): {(chi_bins==1).sum()}, "
+        f"High (>=2.0): {(chi_bins==2).sum()}"
+    )
+
+    # Create StratifiedKFold splitter
+    kfold = StratifiedKFold(n_splits=k_folds, shuffle=shuffle, random_state=seed if shuffle else None)
+
+    # Generate splits at SMILES level with stratification
     folds = []
-    for fold_idx, (train_smiles_idx, val_smiles_idx) in enumerate(kfold.split(unique_smiles)):
+    for fold_idx, (train_smiles_idx, val_smiles_idx) in enumerate(kfold.split(unique_smiles, chi_bins)):
         # Get SMILES for this fold
         train_smiles = unique_smiles[train_smiles_idx]
         val_smiles = unique_smiles[val_smiles_idx]
