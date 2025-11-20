@@ -63,7 +63,7 @@ training:
   device: "cuda"  # "cuda" or "cpu"
 
   # Batch sizes
-  batch_size_dft: 256       # Large batch for DFT data (many samples)
+  batch_size_dft: 64        # Reduced from 256 to prevent CUDA OOM
   batch_size_exp: 64        # Increased from 32 to get more gradient updates
   batch_size_sol: 64        # Medium batch for solubility
 
@@ -188,7 +188,7 @@ cv:
 # ============================================================================
 uncertainty:
   # Number of forward passes for MC Dropout
-  mc_dropout_samples: 150
+  mc_dropout_samples: 30  # Reduced from 150 to prevent CUDA OOM during evaluation
 
   # Keep dropout active during inference
   enable_mc_dropout: true

@@ -20,6 +20,7 @@ import numpy as np
 import pandas as pd
 import torch
 import torch.nn as nn
+from torch.cuda.amp import autocast, GradScaler
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
@@ -167,6 +168,7 @@ def train_epoch(
     config: Config,
     device: torch.device,
     logger,
+    scaler: GradScaler = None,
 ) -> Dict[str, float]:
     """
     Train for one epoch.
@@ -178,6 +180,7 @@ def train_epoch(
         config: Configuration
         device: Device to use
         logger: Logger instance
+        scaler: GradScaler for mixed precision training (optional)
 
     Returns:
         Dictionary of epoch metrics
@@ -197,24 +200,44 @@ def train_epoch(
         # Use actual temperatures from dataset instead of hard-coded T_ref
         temperature = batch["temperature"].to(device)
 
-        # Forward pass with actual temperatures
-        outputs = model(x, temperature=temperature)
-        A, B = outputs["A"], outputs["B"]
-
-        # Compute loss with actual temperatures
-        loss = chi_dft_loss(A, B, chi_true, temperature=temperature)
-
-        # Backward pass
+        # Forward pass with mixed precision
         optimizer.zero_grad()
-        loss.backward()
 
-        # Gradient clipping
-        if config.training.grad_clip_norm is not None:
-            torch.nn.utils.clip_grad_norm_(
-                model.parameters(), config.training.grad_clip_norm
-            )
+        if scaler is not None:
+            # Mixed precision training
+            with autocast():
+                outputs = model(x, temperature=temperature)
+                A, B = outputs["A"], outputs["B"]
+                loss = chi_dft_loss(A, B, chi_true, temperature=temperature)
 
-        optimizer.step()
+            # Backward pass with scaler
+            scaler.scale(loss).backward()
+
+            # Gradient clipping (unscale first for proper clipping)
+            if config.training.grad_clip_norm is not None:
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(
+                    model.parameters(), config.training.grad_clip_norm
+                )
+
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            # Standard training (no mixed precision)
+            outputs = model(x, temperature=temperature)
+            A, B = outputs["A"], outputs["B"]
+            loss = chi_dft_loss(A, B, chi_true, temperature=temperature)
+
+            # Backward pass
+            loss.backward()
+
+            # Gradient clipping
+            if config.training.grad_clip_norm is not None:
+                torch.nn.utils.clip_grad_norm_(
+                    model.parameters(), config.training.grad_clip_norm
+                )
+
+            optimizer.step()
 
         # Track metrics
         total_loss += loss.item()
@@ -426,7 +449,17 @@ def main():
     logger.info("=" * 80)
 
     model = MultiTaskChiSolubilityModel(feature_dim, config)
+
+    # Clear CUDA cache to prevent memory fragmentation
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
     model = model.to(device)
+
+    # Monitor GPU memory usage
+    if torch.cuda.is_available():
+        logger.info(f"GPU memory allocated: {torch.cuda.memory_allocated(device)/1e9:.2f} GB")
+        logger.info(f"GPU memory reserved: {torch.cuda.memory_reserved(device)/1e9:.2f} GB")
 
     n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     logger.info(f"Model has {n_params:,} trainable parameters")
@@ -444,6 +477,11 @@ def main():
         raise ValueError(f"Unknown optimizer: {optimizer_name}")
 
     logger.info(f"Optimizer: {optimizer_name}, lr={lr}, weight_decay={weight_decay}")
+
+    # Setup mixed precision training (AMP)
+    scaler = GradScaler() if torch.cuda.is_available() else None
+    if scaler is not None:
+        logger.info("Mixed precision training (AMP) enabled")
 
     # Setup scheduler
     scheduler = None
@@ -493,7 +531,7 @@ def main():
         logger.info("-" * 80)
 
         # Train
-        train_metrics = train_epoch(model, train_loader, optimizer, config, device, logger)
+        train_metrics = train_epoch(model, train_loader, optimizer, config, device, logger, scaler)
 
         logger.info(
             f"Train - Loss: {train_metrics['loss']:.4f}, "
