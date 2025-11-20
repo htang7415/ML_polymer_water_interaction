@@ -54,7 +54,7 @@ Transfer learning pipeline for predicting polymer-water Flory-Huggins chi parame
 
 **Command**:
 ```bash
-python -m src.training.train_dft --config configs/config.yaml
+bash scripts/run_pretrain_dft.sh
 ```
 
 **Settings**:
@@ -79,9 +79,7 @@ python -m src.training.train_dft --config configs/config.yaml
 
 **Command**:
 ```bash
-python -m src.training.train_multitask \
-    --config configs/config.yaml \
-    --pretrained results/dft_pretrain_*/checkpoints/best_model.pt
+bash scripts/run_multitask.sh results/dft_pretrain_*/checkpoints/best_model.pt
 ```
 
 **What happens**:
@@ -116,11 +114,6 @@ bash scripts/run_exp_chi_cv.sh
 
 # Or specify pretrained model explicitly
 bash scripts/run_exp_chi_cv.sh results/dft_pretrain_*/checkpoints/best_model.pt
-
-# Or direct Python call
-python -m src.training.cv_exp_chi \
-    --config configs/config.yaml \
-    --pretrained results/dft_pretrain_*/checkpoints/best_model.pt
 ```
 
 **What happens**:
@@ -150,16 +143,14 @@ python -m src.training.cv_exp_chi \
 
 ```bash
 # Step 1: Train Stage 1 (pretrain on DFT data)
-python -m src.training.train_dft --config configs/config.yaml
+bash scripts/run_pretrain_dft.sh
 
 # Step 2: Evaluate with CV (understand performance with confidence)
 bash scripts/run_exp_chi_cv.sh results/dft_pretrain_*/checkpoints/best_model.pt
 # → Check cv_summary.json: "MAE = X.XX ± Y.YY"
 
 # Step 3: Train Stage 2 (create deployment model)
-python -m src.training.train_multitask \
-    --config configs/config.yaml \
-    --pretrained results/dft_pretrain_*/checkpoints/best_model.pt
+bash scripts/run_multitask.sh results/dft_pretrain_*/checkpoints/best_model.pt
 # → Get production model with chi + solubility predictions
 ```
 
@@ -219,7 +210,6 @@ model:
 
 # Stage 2 multi-task loss weights
 loss_weights:
-  lambda_dft: 0.0    # DFT dropped in Stage 2
   lambda_exp: 3.0
   lambda_sol: 1.0
 
@@ -348,19 +338,51 @@ results/cv_exp_chi_*/
 
 ## Hyperparameter Optimization (Optional)
 
-**Goal**: Find optimal Stage 1 hyperparameters that transfer best to Stage 2
+You can optimize Stage 1 hyperparameters separately for each fine-tuning strategy.
+
+### Strategy 1: Multi-Task Optimization
+
+**Goal**: Find optimal Stage 1 hyperparameters that transfer best to multi-task fine-tuning
 
 **Command**:
 ```bash
 bash scripts/run_hparam_search.sh --n_trials 50 --timeout_hours 48
 ```
 
-**Search Space**:
-- Encoder architecture, dropout, learning rate, weight decay
-
 **Objective**: Minimize `1.5×exp_mae + 2.0×(1-sol_f1) + 1.5×(1-sol_recall) + 0.1×stage1_mae`
 
-**Output**: `results/hparam_search/*/best_params.json`
+**Output**: `results/hparam_search/transfer_aware_*/best_params.json`
+
+---
+
+### Strategy 2: CV Optimization
+
+**Goal**: Find optimal Stage 1 hyperparameters that transfer best to CV exp chi fine-tuning
+
+**Command**:
+```bash
+bash scripts/run_hparam_search_cv.sh --n_trials 50 --timeout_hours 48
+```
+
+**Objective**: Minimize `mean_mae + 0.2×std_mae + 0.05×stage1_mae`
+
+**Output**: `results/hparam_search/cv_aware_*/best_params.json`
+
+---
+
+### Comparison
+
+| Aspect | Strategy 1 Optimization | Strategy 2 Optimization |
+|--------|------------------------|------------------------|
+| **Focuses on** | Multi-task performance | CV robustness |
+| **Objective** | Exp chi + Solubility | Exp chi only + variance penalty |
+| **Evaluation** | 5-fold CV on both tasks | 5-fold CV on exp chi only |
+| **Best for** | Production deployment | Evaluation & research |
+
+**Search Space** (same for both):
+- Encoder architecture, dropout, learning rate, weight decay
+
+**Time**: ~40-70 GPU hours for 50 trials each
 
 See [HPARAM_SEARCH_GUIDE.md](HPARAM_SEARCH_GUIDE.md) for details.
 
@@ -429,6 +451,8 @@ See [HPARAM_SEARCH_GUIDE.md](HPARAM_SEARCH_GUIDE.md) for details.
 - CV approach documented and ready to use
 - Simplified Pipeline.md structure
 - Better visualization of training approaches
+- Separate hyperparameter optimization for Strategy 1 & Strategy 2
+- All commands use bash consistently
 
 ---
 
