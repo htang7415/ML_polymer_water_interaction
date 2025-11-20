@@ -356,18 +356,18 @@ def compute_metrics_classification(
     # Convert probabilities to binary predictions
     y_pred_np = (p_pred_np >= threshold).astype(int)
 
-    # Compute metrics
+    # Compute metrics (convert numpy scalars to Python floats for checkpoint compatibility)
     metrics = {
-        "accuracy": accuracy_score(y_true_np, y_pred_np),
-        "precision": precision_score(y_true_np, y_pred_np, zero_division=0),
-        "recall": recall_score(y_true_np, y_pred_np, zero_division=0),
-        "f1": f1_score(y_true_np, y_pred_np, zero_division=0),
+        "accuracy": float(accuracy_score(y_true_np, y_pred_np)),
+        "precision": float(precision_score(y_true_np, y_pred_np, zero_division=0)),
+        "recall": float(recall_score(y_true_np, y_pred_np, zero_division=0)),
+        "f1": float(f1_score(y_true_np, y_pred_np, zero_division=0)),
     }
 
     # ROC-AUC (only if both classes present)
     if len(set(y_true_np)) > 1:
         try:
-            metrics["roc_auc"] = roc_auc_score(y_true_np, p_pred_np)
+            metrics["roc_auc"] = float(roc_auc_score(y_true_np, p_pred_np))
         except ValueError:
             metrics["roc_auc"] = 0.0
     else:

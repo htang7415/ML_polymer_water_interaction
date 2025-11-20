@@ -667,7 +667,7 @@ def main():
 
     # MAE
     axes[0].bar(fold_results_df["fold"], fold_results_df["val_mae"], alpha=0.7)
-    axes[0].axhline(mean_mae, color='r', linestyle='--', label=f'Mean: {mean_mae:.4f}')
+    axes[0].axhline(mean_val_mae, color='r', linestyle='--', label=f'Mean: {mean_val_mae:.4f}')
     axes[0].set_xlabel("Fold", fontsize=12)
     axes[0].set_ylabel("MAE", fontsize=12)
     axes[0].set_title("MAE across Folds", fontsize=14)
@@ -676,7 +676,7 @@ def main():
 
     # RMSE
     axes[1].bar(fold_results_df["fold"], fold_results_df["val_rmse"], alpha=0.7)
-    axes[1].axhline(mean_rmse, color='r', linestyle='--', label=f'Mean: {mean_rmse:.4f}')
+    axes[1].axhline(mean_val_rmse, color='r', linestyle='--', label=f'Mean: {mean_val_rmse:.4f}')
     axes[1].set_xlabel("Fold", fontsize=12)
     axes[1].set_ylabel("RMSE", fontsize=12)
     axes[1].set_title("RMSE across Folds", fontsize=14)
@@ -685,7 +685,7 @@ def main():
 
     # R²
     axes[2].bar(fold_results_df["fold"], fold_results_df["val_r2"], alpha=0.7)
-    axes[2].axhline(mean_r2, color='r', linestyle='--', label=f'Mean: {mean_r2:.4f}')
+    axes[2].axhline(mean_val_r2, color='r', linestyle='--', label=f'Mean: {mean_val_r2:.4f}')
     axes[2].set_xlabel("Fold", fontsize=12)
     axes[2].set_ylabel("R²", fontsize=12)
     axes[2].set_title("R² across Folds", fontsize=14)

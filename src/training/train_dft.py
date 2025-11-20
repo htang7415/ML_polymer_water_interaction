@@ -626,7 +626,7 @@ def main():
 
     # Load best model and evaluate on train and test sets with MC dropout
     logger.info("\nLoading best model for final evaluation...")
-    checkpoint = torch.load(run_dir / "checkpoints" / "best_model.pt")
+    checkpoint = torch.load(run_dir / "checkpoints" / "best_model.pt", weights_only=False)
     model.load_state_dict(checkpoint["model_state_dict"])
 
     # ========================================================================
