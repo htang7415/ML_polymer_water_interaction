@@ -860,7 +860,7 @@ def main():
             # Plot results (without uncertainty during training for speed)
             plot_multitask_results(
                 val_predictions,
-                run_dir / "figures" / "best",
+                run_dir / "figures" / "validation",
                 config,
                 title_prefix=f"Validation (Epoch {epoch})",
                 dpi=config.plotting.dpi,
@@ -900,7 +900,7 @@ def main():
 
     # Load best model and evaluate on test set
     logger.info("\nEvaluating on test set...")
-    checkpoint = torch.load(run_dir / "checkpoints" / "best_model.pt")
+    checkpoint = torch.load(run_dir / "checkpoints" / "best_model.pt", weights_only=False)
     model.load_state_dict(checkpoint["model_state_dict"])
 
     # Get basic metrics for logging
@@ -976,7 +976,7 @@ def main():
     # Plot test results with uncertainty
     plot_multitask_results(
         test_predictions,
-        run_dir / "figures" / "test",
+        run_dir / "figures" / "best_model" / "test",
         config,
         title_prefix="Test Set",
         dpi=config.plotting.dpi,
@@ -991,7 +991,7 @@ def main():
                 y_true=exp_targets,
                 y_pred_mean=exp_preds,
                 y_pred_std=test_uncertainties["exp_std"],
-                save_path=run_dir / "figures" / "test" / "error_vs_uncertainty_exp",
+                save_path=run_dir / "figures" / "best_model" / "test" / "error_vs_uncertainty_exp",
                 config=config,
                 title="Experimental Chi: Error vs Uncertainty",
             )
@@ -1004,7 +1004,7 @@ def main():
                 y_true=exp_targets,
                 y_pred_mean=exp_preds,
                 y_pred_std=test_uncertainties["exp_std"],
-                save_path=run_dir / "figures" / "test" / "uncertainty_calibration_exp",
+                save_path=run_dir / "figures" / "best_model" / "test" / "uncertainty_calibration_exp",
                 config=config,
                 title="Experimental Chi: Uncertainty Calibration",
             )
@@ -1055,7 +1055,7 @@ def main():
         plot_calibration(
             y_true=sol_targets,
             y_prob=sol_preds,
-            save_path=run_dir / "figures" / "test" / "calibration_solubility",
+            save_path=run_dir / "figures" / "best_model" / "test" / "calibration_solubility",
             config=config,
             title="Solubility Prediction Calibration (Test Set)",
         )
@@ -1069,7 +1069,7 @@ def main():
         cm, counts = compute_confusion_matrix(sol_targets, sol_preds, threshold=threshold)
         plot_confusion_matrix(
             cm=cm,  # Fixed: was passing 'counts' (dict) instead of 'cm' (array)
-            save_path=run_dir / "figures" / "test" / "confusion_matrix_solubility",
+            save_path=run_dir / "figures" / "best_model" / "test" / "confusion_matrix_solubility",
             config=config,
             title=f"Solubility Confusion Matrix (Test Set, threshold={threshold})",
         )
@@ -1093,7 +1093,7 @@ def main():
             logger.info(f"  {metric_name}: {value:.4f}")
 
     # Create train figures directory
-    train_fig_dir = run_dir / "figures" / "train"
+    train_fig_dir = run_dir / "figures" / "best_model" / "train"
     train_fig_dir.mkdir(parents=True, exist_ok=True)
 
     # Plot train set results
@@ -1129,7 +1129,7 @@ def main():
         plot_calibration(
             y_true=train_sol_targets,
             y_prob=train_sol_preds,
-            save_path=run_dir / "figures" / "train" / "calibration_solubility",
+            save_path=run_dir / "figures" / "best_model" / "train" / "calibration_solubility",
             config=config,
             title="Solubility Prediction Calibration (Train Set)",
         )
@@ -1247,12 +1247,12 @@ def main():
     try:
         # Load final model
         final_checkpoint_path = run_dir / "checkpoints" / "final_model.pt"
-        final_checkpoint = torch.load(final_checkpoint_path, map_location=device)
+        final_checkpoint = torch.load(final_checkpoint_path, map_location=device, weights_only=False)
         model.load_state_dict(final_checkpoint["model_state_dict"])
         logger.info(f"Loaded final model from epoch {final_checkpoint['epoch']}")
 
         # Create final model figures directory
-        final_fig_dir = run_dir / "figures" / "final"
+        final_fig_dir = run_dir / "figures" / "final_model"
         final_fig_dir.mkdir(parents=True, exist_ok=True)
 
         # ===== TEST SET (Final Model) =====
@@ -1336,7 +1336,7 @@ def main():
         logger.info("=" * 80 + "\n")
 
         # Reload best model for consistency
-        best_checkpoint = torch.load(run_dir / "checkpoints" / "best_model.pt", map_location=device)
+        best_checkpoint = torch.load(run_dir / "checkpoints" / "best_model.pt", map_location=device, weights_only=False)
         model.load_state_dict(best_checkpoint["model_state_dict"])
         logger.info("Reloaded best model")
 

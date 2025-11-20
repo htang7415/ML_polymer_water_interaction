@@ -378,7 +378,7 @@ class MultiTaskChiSolubilityModel(nn.Module):
         Example:
             >>> model.load_encoder_and_chi_head("results/dft_pretrain/best_model.pt")
         """
-        checkpoint = torch.load(checkpoint_path, map_location="cpu")
+        checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
 
         # Handle different checkpoint formats
         if "model_state_dict" in checkpoint:

@@ -79,7 +79,7 @@ bash scripts/run_pretrain_dft.sh
 
 **Command**:
 ```bash
-bash scripts/run_multitask.sh results/dft_pretrain_*/checkpoints/best_model.pt
+bash scripts/run_multitask.sh results/dft_pretrain_20251119_215657/checkpoints/best_model.pt
 ```
 
 **What happens**:
@@ -113,7 +113,7 @@ bash scripts/run_multitask.sh results/dft_pretrain_*/checkpoints/best_model.pt
 bash scripts/run_exp_chi_cv.sh
 
 # Or specify pretrained model explicitly
-bash scripts/run_exp_chi_cv.sh results/dft_pretrain_*/checkpoints/best_model.pt
+bash scripts/run_exp_chi_cv.sh results/dft_pretrain_20251119_215657/checkpoints/best_model.pt
 ```
 
 **What happens**:
