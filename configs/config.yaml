@@ -69,24 +69,24 @@ training:
 
   # Number of epochs
   num_epochs_pretrain: 100   # Stage 1 (DFT pretraining)
-  num_epochs_finetune: 500   # Stage 2 (multi-task fine-tuning)
+  num_epochs_finetune: 1000   # Stage 2 (multi-task fine-tuning)
 
   # Optimizer
   optimizer: "adamw"  # "adam" or "adamw"
 
   # Learning rates
   lr_pretrain: 1.0e-3    # Stage 1
-  lr_finetune: 3.0e-4    # Stage 2 (typically lower)
+  lr_finetune: 1.0e-4    # Stage 2 (typically lower)
 
   # Transfer learning: Discriminative learning rates
   use_discriminative_lr: true  # Use different LRs for encoder vs heads
   lr_encoder: 1.0e-5           # Very low LR for pretrained encoder
 
   # Transfer learning: Encoder freezing
-  freeze_encoder_stage2: true  # Freeze encoder initially in Stage 2
+  freeze_encoder_stage2: False  # Freeze encoder for Stage 2 (essential for small experimental dataset)
 
   # Regularization
-  weight_decay: 1.0e-3         # Increased from 1e-4 for small datasets
+  weight_decay: 1.0e-5         # Reduced to allow B parameter to shift freely during fine-tuning
 
   # Learning rate scheduler
   use_scheduler: true
@@ -115,8 +115,8 @@ training:
 # ============================================================================
 model:
   # Shared encoder
-  encoder_hidden_dims: [512, 256]  # List of hidden layer dimensions
-  encoder_latent_dim: 128          # Output dimension z(polymer)
+  encoder_hidden_dims: [128, 64]  # List of hidden layer dimensions
+  encoder_latent_dim: 64          # Output dimension z(polymer)
   encoder_dropout: 0.3             # Increased from 0.2 for better regularization
   encoder_activation: "relu"       # "relu", "elu", "leaky_relu"
   encoder_use_batchnorm: true      # Use batch normalization

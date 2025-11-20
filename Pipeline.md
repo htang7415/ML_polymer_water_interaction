@@ -181,6 +181,69 @@ SMILES → Morgan FP (2048-bit) + RDKit Descriptors (13) → [2061-dim features]
 
 ---
 
+## Loss Functions
+
+### Chi Prediction Loss
+
+**Flory-Huggins Temperature Dependence**: χ(T) = A/T + B
+
+**Loss**: MSE between predicted and true chi values
+```
+chi_pred = A/T + B
+loss_chi = MSE(chi_pred, chi_true)
+```
+
+**Target Normalization** (Approach B):
+- A and B parameters remain in **physical units** (not normalized)
+- Normalization applied **only during loss calculation** for stable gradients
+- Predictions and metrics computed on **original scale**
+- Separate normalizers for DFT and experimental data
+
+**Why normalize?**
+- DFT chi range: -0.04 to 2.15 (narrow)
+- Experimental chi range: -0.05 to 4.40 (wide, 2x larger)
+- Normalization improves gradient flow and prevents range collapse
+
+**Per-Fold Normalization (CV)**:
+- Each fold fits normalizer on training data only
+- Prevents data leakage from validation set
+
+### Solubility Loss
+
+**Binary Classification**: Soluble (1) or Insoluble (0)
+
+**Loss**: Binary cross-entropy with class weights
+```
+loss_sol = BCE(p_soluble, y_true, weight=class_weight_pos)
+```
+
+**Class Imbalance Handling**:
+- Dataset: ~40% soluble, ~60% insoluble
+- `class_weight_pos = 5.0` to boost recall on minority class
+
+**Dynamic Threshold Optimization**:
+- Default threshold: 0.5 (often suboptimal for imbalanced data)
+- Optimize threshold on validation set to maximize F1 or recall
+- Typical optimal: 0.2-0.3
+
+### Multi-Task Loss (Stage 2)
+
+**Weighted Combination**:
+```
+loss_total = λ_exp × loss_exp + λ_sol × loss_sol
+```
+
+**Default Weights**:
+- λ_exp = 3.0 (prioritize experimental chi)
+- λ_sol = 1.0 (solubility auxiliary task)
+
+**Why weight experimental chi higher?**
+- Smaller dataset (40 vs 443 samples)
+- Primary scientific interest
+- Prevents solubility from dominating training
+
+---
+
 ## Configuration
 
 All settings in [configs/config.yaml](configs/config.yaml):
@@ -438,6 +501,14 @@ See [HPARAM_SEARCH_GUIDE.md](HPARAM_SEARCH_GUIDE.md) for details.
 
 ## Recent Updates
 
+**2025-01-20**: Phase 1 Improvements (Normalization)
+- Implemented Approach B target normalization (normalize in loss only)
+- Separate normalizers for DFT and experimental chi
+- Stratified cross-validation by chi value bins
+- Reduced weight_decay (1e-3 → 1e-5) for B parameter flexibility
+- Updated all training scripts: train_dft.py, cv_exp_chi.py, train_multitask.py, train_multitask_quick.py
+- Expected improvements: Val R² from -21.86 → 0.3-0.6
+
 **2025-01-19**: Major improvements
 - Three-approach pipeline (Stage 1 + two strategies)
 - Dropped DFT from Stage 2
@@ -446,7 +517,7 @@ See [HPARAM_SEARCH_GUIDE.md](HPARAM_SEARCH_GUIDE.md) for details.
 - Transfer-aware hyperparameter search
 - Fixed 3 critical bugs in train_multitask.py
 
-**Latest**:
+**Previous**:
 - Complete evaluation pipeline (train + test for best & final models)
 - CV approach documented and ready to use
 - Simplified Pipeline.md structure
