@@ -27,8 +27,8 @@ paths:
 # ============================================================================
 chem:
   # Morgan fingerprint settings
-  morgan_radius: 2
-  morgan_n_bits: 2048
+  morgan_radius: 3
+  morgan_n_bits: 1024
 
   # RDKit descriptors to compute
   # Full list of available descriptors: MolWt, LogP, TPSA, NumHDonors, NumHAcceptors,
@@ -68,7 +68,7 @@ training:
   batch_size_sol: 64        # Medium batch for solubility
 
   # Number of epochs
-  num_epochs_pretrain: 200   # Stage 1 (DFT pretraining)
+  num_epochs_pretrain: 100   # Stage 1 (DFT pretraining)
   num_epochs_finetune: 200   # Stage 2 (multi-task fine-tuning)
 
   # Optimizer
@@ -108,7 +108,7 @@ training:
 
   # Checkpoint saving
   save_best_only: true
-  save_interval: 10  # Save checkpoint every N epochs (if not save_best_only)
+  save_interval: 50  # Save checkpoint every N epochs (if not save_best_only)
 
 # ============================================================================
 # Model: Architecture hyperparameters
@@ -188,7 +188,7 @@ cv:
 # ============================================================================
 uncertainty:
   # Number of forward passes for MC Dropout
-  mc_dropout_samples: 30  # Reduced from 150 to prevent CUDA OOM during evaluation
+  mc_dropout_samples: 100  # Reduced from 150 to prevent CUDA OOM during evaluation
 
   # Keep dropout active during inference
   enable_mc_dropout: true
@@ -213,7 +213,7 @@ hparam_search:
   search_space:
     encoder_latent_dim: [64, 128, 256]
     encoder_dropout: [0.1, 0.2, 0.3, 0.4]
-    lr_finetune: [1.0e-4, 1.0e-3]  # Log scale
+    lr_finetune: [1.0e-5, 1.0e-3]  # Log scale
     lambda_exp: [1.0, 5.0]
     class_weight_pos: [1.0, 5.0]
 
@@ -228,7 +228,7 @@ logging:
   file_level: "DEBUG"
 
   # Log every N batches during training
-  log_interval: 10
+  log_interval: 50
 
   # Validation frequency (epochs)
   val_interval: 1
@@ -244,7 +244,7 @@ plotting:
   # Figure format
   save_png: true
   save_pdf: true
-  dpi: 300
+  dpi: 600
 
   # Style
   style: "seaborn-v0_8-paper"  # matplotlib style
