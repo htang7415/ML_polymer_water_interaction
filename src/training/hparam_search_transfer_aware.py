@@ -23,7 +23,7 @@ import torch
 
 sys.path.append(str(Path(__file__).parent.parent.parent))
 
-from src.training.train_dft_pretrain import main as train_dft_main
+from src.training.train_dft import main as train_dft_main
 from src.training.train_multitask_quick import train_multitask_quick
 from src.training.optuna_utils import (
     create_or_load_study,
@@ -100,8 +100,10 @@ class TransferAwareObjective:
         # ====================================================================
         self.logger.info("\n[Step 1/3] Training Stage 1 model...")
 
-        stage1_config = self._create_stage1_config(stage1_params, trial_number)
-        stage1_results = self._train_stage1(stage1_config)
+        # Create trial output directories
+        stage1_output_dir = self.results_dir / f"trial_{trial_number}" / "stage1"
+        stage1_config = self._create_stage1_config(stage1_params, trial_number, stage1_output_dir)
+        stage1_results = self._train_stage1(stage1_config, stage1_output_dir)
 
         if stage1_results is None:
             self.logger.error("Stage 1 training failed")
@@ -122,7 +124,8 @@ class TransferAwareObjective:
         # ====================================================================
         self.logger.info(f"\n[Step 2/3] Quick fine-tuning Stage 2 ({self.n_cv_folds}-fold CV)...")
 
-        stage2_config = self._create_stage2_config(trial_number)
+        stage2_output_dir = self.results_dir / f"trial_{trial_number}" / "stage2"
+        stage2_config = self._create_stage2_config(trial_number, stage2_output_dir)
         stage2_cv_metrics = self._finetune_stage2_cv(stage2_config, stage1_checkpoint)
 
         if stage2_cv_metrics is None:
@@ -163,66 +166,86 @@ class TransferAwareObjective:
             'weight_decay': trial.suggest_float('weight_decay', 1e-5, 1e-3, log=True),
         }
 
-    def _create_stage1_config(self, params: Dict, trial_number: int):
+    def _create_stage1_config(self, params: Dict, trial_number: int, output_dir: Path):
         """Create Stage 1 config with sampled hyperparameters."""
-        config = self.base_config.copy()
+        from src.utils.config import update_config
 
-        # Update model hyperparameters
-        config.model.encoder_latent_dim = params['encoder_latent_dim']
-        config.model.encoder_dropout = params['encoder_dropout']
-        config.model.chi_head_dropout = params['chi_head_dropout']
+        # Use update_config to properly propagate all nested updates
+        updates = {
+            # Model hyperparameters
+            'model.encoder_latent_dim': params['encoder_latent_dim'],
+            'model.encoder_dropout': params['encoder_dropout'],
+            'model.chi_head_dropout': params['chi_head_dropout'],
+            # Parse hidden dims
+            'model.encoder_hidden_dims': [int(x) for x in params['encoder_hidden_dims'].split('_')],
+            # Training hyperparameters
+            'training.lr_pretrain': params['lr_pretrain'],
+            'training.weight_decay': params['weight_decay'],
+            # Set output directory for this trial
+            'paths.results_dir': str(output_dir.parent),  # Parent dir for results
+            # Add HPO flag to minimize storage
+            'is_hparam_search': True,
+        }
 
-        # Parse hidden dims
-        hidden_str = params['encoder_hidden_dims']
-        config.model.encoder_hidden_dims = [int(x) for x in hidden_str.split('_')]
+        config = update_config(self.base_config, updates)
 
-        # Update training hyperparameters
-        config.training.lr_pretrain = params['lr_pretrain']
-        config.training.weight_decay = params['weight_decay']
-
-        # Set output directory for this trial
-        config.paths.results_dir = str(self.results_dir / f"trial_{trial_number}" / "stage1")
+        # Save config to trial directory for debugging
+        config_path = output_dir / "config.yaml"
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        save_config(config, config_path)
 
         return config
 
-    def _create_stage2_config(self, trial_number: int):
+    def _create_stage2_config(self, trial_number: int, output_dir: Path):
         """Create Stage 2 config (fixed hyperparameters for fair comparison)."""
-        config = self.base_config.copy()
+        from src.utils.config import update_config
 
-        # Fixed Stage 2 hyperparameters
-        config.training.freeze_encoder_stage2 = True
-        config.training.use_discriminative_lr = True
-        config.training.lr_encoder = 1e-5
-        config.training.lr_finetune = 3e-4
-        config.training.num_epochs_quick = self.stage2_epochs
-        config.training.quick_patience = 10
+        # Use update_config to properly propagate all nested updates
+        updates = {
+            # Fixed Stage 2 hyperparameters
+            'training.freeze_encoder_stage2': True,
+            'training.use_discriminative_lr': True,
+            'training.lr_encoder': 1e-5,
+            'training.lr_finetune': 3e-4,
+            'training.num_epochs_quick': self.stage2_epochs,
+            'training.quick_patience': 10,
+            # Loss weights
+            'loss_weights.lambda_dft': 0.0,
+            'loss_weights.lambda_exp': 3.0,
+            'loss_weights.lambda_sol': 1.0,
+            # Solubility settings
+            'solubility.class_weight_pos': 5.0,
+            'solubility.optimize_threshold': True,
+            # Set output directory
+            'paths.results_dir': str(output_dir.parent),  # Parent dir for results
+            # Add HPO flag to minimize storage
+            'is_hparam_search': True,
+        }
 
-        config.loss_weights.lambda_dft = 0.0
-        config.loss_weights.lambda_exp = 3.0
-        config.loss_weights.lambda_sol = 1.0
+        config = update_config(self.base_config, updates)
 
-        config.solubility.class_weight_pos = 5.0
-        config.solubility.optimize_threshold = True
-
-        # Set output directory
-        config.paths.results_dir = str(self.results_dir / f"trial_{trial_number}" / "stage2")
+        # Save config to trial directory for debugging
+        config_path = output_dir / "config.yaml"
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        save_config(config, config_path)
 
         return config
 
-    def _train_stage1(self, config):
+    def _train_stage1(self, config, output_dir: Path):
         """Train Stage 1 model."""
         try:
             # Import and run Stage 1 training
-            # Note: This assumes train_dft_pretrain.py has a main() function that returns results
-            # You may need to adapt this based on your actual Stage 1 training script
+            # Note: This uses the train_dft() wrapper function
+            from src.training.train_dft import train_dft
 
-            from src.training.train_dft_pretrain import train_dft
-
-            results = train_dft(config)
+            # Pass output_dir explicitly so train_dft knows where to save results
+            results = train_dft(config, output_dir=output_dir)
             return results
 
         except Exception as e:
             self.logger.error(f"Stage 1 training error: {e}")
+            import traceback
+            self.logger.error(traceback.format_exc())
             return None
 
     def _finetune_stage2_cv(self, config, stage1_checkpoint: Path) -> Dict:

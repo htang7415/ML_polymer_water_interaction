@@ -4,6 +4,9 @@
 # Reproducibility seed
 seed: 42
 
+# HPO minimal storage mode (set to true by search scripts to skip heavy saves)
+is_hparam_search: false
+
 # ============================================================================
 # Paths
 # ============================================================================
@@ -175,26 +178,41 @@ hparam_search:
 
   # Cross-validation for Stage 2
   n_cv_folds: 5                # 5-fold CV for robust evaluation
-  stage2_epochs: 20            # Quick Stage 2 training (20 epochs)
+  stage2_epochs: 60            # Quick Stage 2 training (20 epochs)
 
   # Pruning (early stopping for bad trials)
   use_pruning: false           # Disabled for simplicity
 
-  # Search space for Stage 1 hyperparameters
+  # Search space (for documentation - actual ranges defined in hparam_search_cv_aware.py)
   search_space:
+    # ========== Stage 1: Pretrain on DFT ==========
     # Encoder architecture
     encoder_latent_dim: [64, 128, 256]
     encoder_hidden_dims: ["512_256", "1024_512_256", "256_128"]
 
-    # Dropout
+    # Dropout (Stage 1)
     encoder_dropout: [0.15, 0.35]    # Continuous range
     chi_head_dropout: [0.05, 0.25]   # Continuous range
 
     # Learning rate (log scale)
-    lr_pretrain: [5.0e-4, 2.0e-3]
+    lr_pretrain: [1.0e-5, 3.0e-3]    # Expanded upper range
 
     # Regularization (log scale)
     weight_decay: [1.0e-5, 1.0e-3]
+
+    # Batch size (Stage 1)
+    batch_size_dft: [64, 128, 256]   # NEW: DFT batch size
+
+    # ========== Stage 2: Fine-tune on Exp Chi (Strategy 1 & 2) ==========
+    # Strategy 1: Higher head learning rate
+    lr_finetune: [1.0e-5, 1.0e-3]    # NEW: Chi head LR (log scale)
+    lr_encoder: [1.0e-6, 1.0e-3]     # NEW: Encoder LR (log scale, lower)
+    freeze_encoder_stage2: [true, false]  # NEW: Whether to freeze encoder
+    stage2_chi_dropout: [0.05, 0.2]  # NEW: Reduced dropout for chi head
+    early_stopping_patience: [60, 80, 100, 150]  # NEW: Longer patience
+
+    # Strategy 2: Address batch imbalance
+    batch_size_exp: [1, 2, 4, 8]     # NEW: Smaller batches = more steps/epoch
 
   # Objective weights (for computing transfer objective)
   objective_weights:

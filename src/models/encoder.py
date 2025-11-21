@@ -61,7 +61,9 @@ class Encoder(nn.Module):
             layers.append(nn.Linear(prev_dim, hidden_dim))
 
             if self.use_batchnorm:
-                layers.append(nn.BatchNorm1d(hidden_dim))
+                # Use LayerNorm instead of BatchNorm for better handling of small batch sizes
+                # LayerNorm normalizes across features, so it works with batch_size=1
+                layers.append(nn.LayerNorm(hidden_dim))
 
             layers.append(self.activation)
             layers.append(nn.Dropout(p=self.dropout_p))

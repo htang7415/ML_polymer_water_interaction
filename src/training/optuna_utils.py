@@ -108,8 +108,8 @@ def plot_optimization_history(
         save_path: Path to save figure
         title: Plot title
     """
-    fig = optuna.visualization.matplotlib.plot_optimization_history(study)
-    fig.suptitle(title, fontsize=14)
+    ax = optuna.visualization.matplotlib.plot_optimization_history(study)
+    ax.set_title(title, fontsize=14)
 
     save_path.parent.mkdir(parents=True, exist_ok=True)
     plt.tight_layout()
@@ -132,8 +132,8 @@ def plot_param_importances(
         title: Plot title
     """
     try:
-        fig = optuna.visualization.matplotlib.plot_param_importances(study)
-        fig.suptitle(title, fontsize=14)
+        ax = optuna.visualization.matplotlib.plot_param_importances(study)
+        ax.set_title(title, fontsize=14)
 
         save_path.parent.mkdir(parents=True, exist_ok=True)
         plt.tight_layout()
@@ -318,3 +318,45 @@ def save_complete_results(
     top_trials.to_csv(save_dir / f"{prefix}top_20_trials.csv", index=False)
 
     print(f"\n✅ All results saved to {save_dir}")
+
+
+def save_trial_metrics(
+    trial: optuna.Trial,
+    hyperparams: Dict,
+    metrics: Dict,
+    output_path: Path,
+):
+    """
+    Save detailed trial metrics to CSV (append mode).
+
+    Args:
+        trial: Optuna trial object
+        hyperparams: Dictionary of all hyperparameters (Stage 1 + Stage 2)
+        metrics: Dictionary of all metrics (train/val/test)
+        output_path: Path to CSV file (will be created/appended)
+    """
+    # Combine trial number, objective, hyperparams, and metrics
+    row_data = {
+        'trial_number': trial.number,
+        'objective': trial.value if trial.value is not None else float('nan'),
+    }
+
+    # Add all hyperparameters
+    row_data.update(hyperparams)
+
+    # Add all metrics
+    row_data.update(metrics)
+
+    # Convert to DataFrame
+    df = pd.DataFrame([row_data])
+
+    # Append to CSV (create if doesn't exist)
+    if output_path.exists():
+        df.to_csv(output_path, mode='a', header=False, index=False)
+    else:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        df.to_csv(output_path, mode='w', header=True, index=False)
+
+    # Also store in trial user_attrs for Optuna
+    for key, value in metrics.items():
+        trial.set_user_attr(key, value)

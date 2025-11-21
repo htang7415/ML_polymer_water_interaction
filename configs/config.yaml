@@ -4,6 +4,9 @@
 # Reproducibility seed
 seed: 42
 
+# HPO minimal storage mode (set to true to skip heavy saves like checkpoints and predictions)
+is_hparam_search: false
+
 # ============================================================================
 # Paths
 # ============================================================================
@@ -64,8 +67,8 @@ training:
 
   # Batch sizes
   batch_size_dft: 64        # Reduced from 256 to prevent CUDA OOM
-  batch_size_exp: 64        # Increased from 32 to get more gradient updates
-  batch_size_sol: 64        # Medium batch for solubility
+  batch_size_exp: 2        # Increased from 32 to get more gradient updates
+  batch_size_sol: 4        # Medium batch for solubility
 
   # Number of epochs
   num_epochs_pretrain: 100   # Stage 1 (DFT pretraining)
@@ -76,14 +79,14 @@ training:
 
   # Learning rates
   lr_pretrain: 1.0e-3    # Stage 1
-  lr_finetune: 1.0e-4    # Stage 2 (typically lower)
+  lr_finetune: 1.0e-5    # Stage 2 (typically lower)
 
   # Transfer learning: Discriminative learning rates
   use_discriminative_lr: true  # Use different LRs for encoder vs heads
   lr_encoder: 1.0e-5           # Very low LR for pretrained encoder
 
   # Transfer learning: Encoder freezing
-  freeze_encoder_stage2: False  # Freeze encoder for Stage 2 (essential for small experimental dataset)
+  freeze_encoder_stage2: True  # Freeze encoder for Stage 2 (essential for small experimental dataset)
 
   # Regularization
   weight_decay: 1.0e-5         # Reduced to allow B parameter to shift freely during fine-tuning
@@ -97,7 +100,7 @@ training:
 
   # Early stopping
   early_stopping: true
-  early_stopping_patience: 20
+  early_stopping_patience: 40
 
   # DataLoader settings
   num_workers: 4
@@ -115,8 +118,8 @@ training:
 # ============================================================================
 model:
   # Shared encoder
-  encoder_hidden_dims: [128, 64]  # List of hidden layer dimensions
-  encoder_latent_dim: 64          # Output dimension z(polymer)
+  encoder_hidden_dims: [512, 256]  # List of hidden layer dimensions
+  encoder_latent_dim: 128          # Output dimension z(polymer)
   encoder_dropout: 0.3             # Increased from 0.2 for better regularization
   encoder_activation: "relu"       # "relu", "elu", "leaky_relu"
   encoder_use_batchnorm: true      # Use batch normalization
@@ -139,7 +142,7 @@ model:
 # ============================================================================
 loss_weights:
   lambda_dft: 0.0   # Set to 0.0 to drop DFT from Stage 2 (focus on target tasks)
-  lambda_exp: 3.0   # Increased from 2.0 - primary task for Stage 2
+  lambda_exp: 2.0   # Increased from 2.0 - primary task for Stage 2
   lambda_sol: 1.0   # Weight for solubility loss
 
 # ============================================================================
