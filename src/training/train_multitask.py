@@ -207,6 +207,7 @@ def load_and_prepare_data(
         pin_memory=pin_memory,
         collate_fn=collate_dft_chi,
         worker_init_fn=lambda wid: worker_init_fn(wid, config.seed),
+        drop_last=True,  # Prevent batch size of 1 for BatchNorm
     )
 
     train_exp_loader = DataLoader(
@@ -217,6 +218,7 @@ def load_and_prepare_data(
         pin_memory=pin_memory,
         collate_fn=collate_exp_chi,
         worker_init_fn=lambda wid: worker_init_fn(wid, config.seed),
+        drop_last=True,  # Prevent batch size of 1 for BatchNorm
     )
 
     train_sol_loader = DataLoader(
@@ -227,6 +229,7 @@ def load_and_prepare_data(
         pin_memory=pin_memory,
         collate_fn=collate_solubility,
         worker_init_fn=lambda wid: worker_init_fn(wid, config.seed),
+        drop_last=True,  # Prevent batch size of 1 for BatchNorm
     )
 
     # Val loaders

@@ -2,6 +2,7 @@
 Configuration loading and validation utilities.
 """
 
+import copy
 import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
@@ -45,9 +46,18 @@ class Config:
         """Get value with default fallback."""
         return self._config.get(key, default)
 
+    def copy(self) -> "Config":
+        """
+        Deep copy the configuration into a new Config instance.
+
+        Needed when the same base config is reused across experiments/trials
+        and we want to avoid cross-contamination of nested values.
+        """
+        return Config(copy.deepcopy(self._config))
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert back to nested dictionary."""
-        return self._config.copy()
+        return copy.deepcopy(self._config)
 
     def __repr__(self) -> str:
         return f"Config({self._config})"

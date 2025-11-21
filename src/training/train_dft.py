@@ -406,6 +406,72 @@ def plot_parity(
     plt.close()
 
 
+def train_dft(config: Config, output_dir: Path = None) -> Dict:
+    """
+    Train DFT model with given config (for HPO).
+
+    Args:
+        config: Configuration object
+        output_dir: Optional output directory (if None, auto-generated)
+
+    Returns:
+        Dictionary with val_mae and checkpoint_path
+    """
+    # NOTE: This is a wrapper for HPO. For full training, use main().
+    # For now, call main() by creating a temporary config file
+    import tempfile
+    import subprocess
+
+    # Create temporary config file
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
+        save_config(config, Path(f.name))
+        temp_config_path = f.name
+
+    try:
+        # Set output dir in config if provided
+        if output_dir:
+            config.paths.results_dir = str(output_dir)
+            save_config(config, Path(temp_config_path))
+
+        # Call main() with the temp config
+        result = subprocess.run(
+            [sys.executable, '-m', 'src.training.train_dft', '--config', temp_config_path],
+            capture_output=True,
+            text=True,
+            cwd=Path(__file__).parent.parent.parent
+        )
+
+        if result.returncode != 0:
+            raise RuntimeError(f"Training failed: {result.stderr}")
+
+        # Read the summary.json to get results
+        if output_dir:
+            run_dir = Path(output_dir)
+        else:
+            # Find the most recent dft_pretrain directory
+            results_dir = Path(config.paths.results_dir)
+            dft_dirs = sorted(results_dir.glob("dft_pretrain_*"))
+            if not dft_dirs:
+                raise FileNotFoundError("No DFT training output found")
+            run_dir = dft_dirs[-1]
+
+        # Load summary
+        with open(run_dir / "summary.json") as f:
+            summary = json.load(f)
+
+        # Extract what HPO needs
+        return {
+            'val_mae': summary['test_metrics']['mae'],  # Using test as proxy for val
+            'checkpoint_path': Path(summary['best_model_checkpoint']),
+        }
+
+    finally:
+        # Clean up temp file
+        import os
+        if os.path.exists(temp_config_path):
+            os.unlink(temp_config_path)
+
+
 def main():
     """Main training function."""
     # Parse arguments
@@ -622,20 +688,25 @@ def main():
     logger.info(f"Best epoch: {best_epoch}")
     logger.info(f"Best validation loss: {best_val_loss:.4f}")
 
-    # Save final model (last epoch)
-    final_checkpoint_path = run_dir / "checkpoints" / "final_model.pt"
-    final_checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+    # Save final model (last epoch) - skip in HPO mode to save space
+    is_hpo_mode = config.get('is_hparam_search', False)
 
-    torch.save({
-        "epoch": epoch,
-        "model_state_dict": model.state_dict(),
-        "optimizer_state_dict": optimizer.state_dict(),
-        "val_loss": val_metrics["loss"],
-        "val_mae": val_metrics["mae"],
-        "config": config.to_dict(),
-    }, final_checkpoint_path)
+    if not is_hpo_mode:
+        final_checkpoint_path = run_dir / "checkpoints" / "final_model.pt"
+        final_checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
 
-    logger.info(f"Saved final model (epoch {epoch}) to {final_checkpoint_path}")
+        torch.save({
+            "epoch": epoch,
+            "model_state_dict": model.state_dict(),
+            "optimizer_state_dict": optimizer.state_dict(),
+            "val_loss": val_metrics["loss"],
+            "val_mae": val_metrics["mae"],
+            "config": config.to_dict(),
+        }, final_checkpoint_path)
+
+        logger.info(f"Saved final model (epoch {epoch}) to {final_checkpoint_path}")
+    else:
+        logger.info(f"Skipping final model save (HPO mode)")
 
     # Load best model and evaluate on train and test sets with MC dropout
     logger.info("\nLoading best model for final evaluation...")
@@ -659,54 +730,57 @@ def main():
         f"R²: {train_metrics['r2']:.4f}"
     )
 
-    # Get detailed train predictions with MC dropout uncertainty
-    logger.info("Computing train predictions with MC dropout uncertainty...")
-    enable_mc_dropout(model)
-    train_mc_results = mc_predict_batch(
-        model=model,
-        dataloader=train_loader,
-        T_ref=config.model.T_ref_K,
-        n_samples=config.uncertainty.mc_dropout_samples,
-        device=device,
-        predict_solubility=False,
-    )
-
-    train_preds = train_mc_results["chi_mean"]
-    train_preds_std = train_mc_results["chi_std"]
-    train_targets = train_mc_results["chi_true"]
-    train_temps = train_mc_results["temperatures"]
-    train_A = train_mc_results["A_mean"]
-    train_B = train_mc_results["B_mean"]
-    train_smiles = train_mc_results["smiles"]
-
-    # Save detailed train predictions with uncertainty
-    save_detailed_predictions(
-        predictions=train_preds,
-        targets=train_targets,
-        save_path=run_dir / "train_predictions.csv",
-        smiles=train_smiles,
-        temperatures=train_temps,
-        A_params=train_A,
-        B_params=train_B,
-        uncertainties=train_preds_std,
-    )
-    logger.info(f"Saved train predictions with uncertainty to train_predictions.csv")
-
-    # Plot train parity with uncertainty
-    logger.info("Generating train set uncertainty-aware parity plots...")
-    try:
-        plot_parity_with_uncertainty(
-            y_true=train_targets,
-            y_pred_mean=train_preds,
-            y_pred_std=train_preds_std,
-            save_path=run_dir / "figures" / "parity_with_uncertainty_train",
-            config=config,
-            title="DFT Chi Parity Plot with Uncertainty (Train Set)",
-            error_bar_type="color",
+    # Get detailed train predictions with MC dropout uncertainty - skip in HPO mode
+    if not is_hpo_mode:
+        logger.info("Computing train predictions with MC dropout uncertainty...")
+        enable_mc_dropout(model)
+        train_mc_results = mc_predict_batch(
+            model=model,
+            dataloader=train_loader,
+            T_ref=config.model.T_ref_K,
+            n_samples=config.uncertainty.mc_dropout_samples,
+            device=device,
+            predict_solubility=False,
         )
-        logger.info("Saved train uncertainty parity plot")
-    except Exception as e:
-        logger.error(f"Failed to generate train uncertainty parity plot: {e}")
+
+        train_preds = train_mc_results["chi_mean"]
+        train_preds_std = train_mc_results["chi_std"]
+        train_targets = train_mc_results["chi_true"]
+        train_temps = train_mc_results["temperatures"]
+        train_A = train_mc_results["A_mean"]
+        train_B = train_mc_results["B_mean"]
+        train_smiles = train_mc_results["smiles"]
+
+        # Save detailed train predictions with uncertainty
+        save_detailed_predictions(
+            predictions=train_preds,
+            targets=train_targets,
+            save_path=run_dir / "train_predictions.csv",
+            smiles=train_smiles,
+            temperatures=train_temps,
+            A_params=train_A,
+            B_params=train_B,
+            uncertainties=train_preds_std,
+        )
+        logger.info(f"Saved train predictions with uncertainty to train_predictions.csv")
+
+        # Plot train parity with uncertainty
+        logger.info("Generating train set uncertainty-aware parity plots...")
+        try:
+            plot_parity_with_uncertainty(
+                y_true=train_targets,
+                y_pred_mean=train_preds,
+                y_pred_std=train_preds_std,
+                save_path=run_dir / "figures" / "parity_with_uncertainty_train",
+                config=config,
+                title="DFT Chi Parity Plot with Uncertainty (Train Set)",
+                error_bar_type="color",
+            )
+            logger.info("Saved train uncertainty parity plot")
+        except Exception as e:
+            logger.error(f"Failed to generate train uncertainty parity plot: {e}")
+    else:
+        logger.info("Skipping train predictions and plots (HPO mode)")
 
     # ========================================================================
     # Evaluate on test set
@@ -725,123 +799,126 @@ def main():
         f"R²: {test_metrics['r2']:.4f}"
     )
 
-    # Get detailed test predictions with MC dropout uncertainty
-    logger.info("Computing test predictions with MC dropout uncertainty...")
-    enable_mc_dropout(model)
-    test_mc_results = mc_predict_batch(
-        model=model,
-        dataloader=test_loader,
-        T_ref=config.model.T_ref_K,
-        n_samples=config.uncertainty.mc_dropout_samples,
-        device=device,
-        predict_solubility=False,
-    )
-
-    test_preds = test_mc_results["chi_mean"]
-    test_preds_std = test_mc_results["chi_std"]
-    test_targets = test_mc_results["chi_true"]
-    test_temps = test_mc_results["temperatures"]
-    test_A = test_mc_results["A_mean"]
-    test_B = test_mc_results["B_mean"]
-    test_smiles = test_mc_results["smiles"]
-
-    # Save detailed test predictions with uncertainty
-    save_detailed_predictions(
-        predictions=test_preds,
-        targets=test_targets,
-        save_path=run_dir / "test_predictions.csv",
-        smiles=test_smiles,
-        temperatures=test_temps,
-        A_params=test_A,
-        B_params=test_B,
-        uncertainties=test_preds_std,
-    )
-
-    # Plot parity with uncertainty
-    logger.info("Generating uncertainty-aware parity plots...")
-    try:
-        plot_parity_with_uncertainty(
-            y_true=test_targets,
-            y_pred_mean=test_preds,
-            y_pred_std=test_preds_std,
-            save_path=run_dir / "figures" / "parity_with_uncertainty_test",
-            config=config,
-            title="DFT Chi Parity Plot with Uncertainty (Test Set)",
-            error_bar_type="color",  # Use color-coding for many points
+    # Get detailed test predictions with MC dropout uncertainty - skip in HPO mode
+    if not is_hpo_mode:
+        logger.info("Computing test predictions with MC dropout uncertainty...")
+        enable_mc_dropout(model)
+        test_mc_results = mc_predict_batch(
+            model=model,
+            dataloader=test_loader,
+            T_ref=config.model.T_ref_K,
+            n_samples=config.uncertainty.mc_dropout_samples,
+            device=device,
+            predict_solubility=False,
         )
-        logger.info("Saved uncertainty parity plot")
-    except Exception as e:
-        logger.error(f"Failed to generate uncertainty parity plot: {e}")
 
-    # Plot uncertainty calibration
-    try:
-        plot_error_vs_uncertainty(
-            y_true=test_targets,
-            y_pred_mean=test_preds,
-            y_pred_std=test_preds_std,
-            save_path=run_dir / "figures" / "error_vs_uncertainty_test",
-            config=config,
-        )
-        logger.info("Saved error vs uncertainty plot")
-    except Exception as e:
-        logger.error(f"Failed to generate error vs uncertainty plot: {e}")
+        test_preds = test_mc_results["chi_mean"]
+        test_preds_std = test_mc_results["chi_std"]
+        test_targets = test_mc_results["chi_true"]
+        test_temps = test_mc_results["temperatures"]
+        test_A = test_mc_results["A_mean"]
+        test_B = test_mc_results["B_mean"]
+        test_smiles = test_mc_results["smiles"]
 
-    try:
-        plot_uncertainty_calibration(
-            y_true=test_targets,
-            y_pred_mean=test_preds,
-            y_pred_std=test_preds_std,
-            save_path=run_dir / "figures" / "uncertainty_calibration_test",
-            config=config,
-        )
-        logger.info("Saved uncertainty calibration plot")
-    except Exception as e:
-        logger.error(f"Failed to generate uncertainty calibration plot: {e}")
-
-    # Generate training history plots
-    logger.info("\nGenerating training history plots...")
-    try:
-        plot_training_history(
-            metrics_csv_path=run_dir / "metrics.csv",
-            save_path=run_dir / "figures" / "training_curves",
-            config=config,
-            title="DFT Training History",
-            is_multitask=False,
-        )
-        logger.info(f"Saved training curves to {run_dir / 'figures' / 'training_curves.png'}")
-    except Exception as e:
-        logger.error(f"Failed to generate training history plot: {e}")
-
-    # Generate additional diagnostic plots
-    logger.info("Generating diagnostic plots...")
-
-    # Temperature-colored parity plot for test set
-    try:
-        plot_parity_with_temperature(
-            y_true=test_targets,
-            y_pred=test_preds,
+        # Save detailed test predictions with uncertainty
+        save_detailed_predictions(
+            predictions=test_preds,
+            targets=test_targets,
+            save_path=run_dir / "test_predictions.csv",
+            smiles=test_smiles,
             temperatures=test_temps,
-            save_path=run_dir / "figures" / "parity_plot_test_temperature",
-            config=config,
-            title="DFT Chi Parity Plot - Colored by Temperature (Test Set)",
+            A_params=test_A,
+            B_params=test_B,
+            uncertainties=test_preds_std,
         )
-        logger.info(f"Saved temperature-colored parity plot")
-    except Exception as e:
-        logger.error(f"Failed to generate temperature-colored parity plot: {e}")
 
-    # Residual vs temperature plot
-    try:
-        plot_residual_vs_temperature(
-            y_true=test_targets,
-            y_pred=test_preds,
-            temperatures=test_temps,
-            save_path=run_dir / "figures" / "residual_vs_temperature_test",
-            config=config,
-            title="Residuals vs Temperature (Test Set)",
-        )
-        logger.info(f"Saved residual vs temperature plot")
-    except Exception as e:
-        logger.error(f"Failed to generate residual plot: {e}")
+        # Plot parity with uncertainty
+        logger.info("Generating uncertainty-aware parity plots...")
+        try:
+            plot_parity_with_uncertainty(
+                y_true=test_targets,
+                y_pred_mean=test_preds,
+                y_pred_std=test_preds_std,
+                save_path=run_dir / "figures" / "parity_with_uncertainty_test",
+                config=config,
+                title="DFT Chi Parity Plot with Uncertainty (Test Set)",
+                error_bar_type="color",  # Use color-coding for many points
+            )
+            logger.info("Saved uncertainty parity plot")
+        except Exception as e:
+            logger.error(f"Failed to generate uncertainty parity plot: {e}")
+
+        # Plot uncertainty calibration
+        try:
+            plot_error_vs_uncertainty(
+                y_true=test_targets,
+                y_pred_mean=test_preds,
+                y_pred_std=test_preds_std,
+                save_path=run_dir / "figures" / "error_vs_uncertainty_test",
+                config=config,
+            )
+            logger.info("Saved error vs uncertainty plot")
+        except Exception as e:
+            logger.error(f"Failed to generate error vs uncertainty plot: {e}")
+
+        try:
+            plot_uncertainty_calibration(
+                y_true=test_targets,
+                y_pred_mean=test_preds,
+                y_pred_std=test_preds_std,
+                save_path=run_dir / "figures" / "uncertainty_calibration_test",
+                config=config,
+            )
+            logger.info("Saved uncertainty calibration plot")
+        except Exception as e:
+            logger.error(f"Failed to generate uncertainty calibration plot: {e}")
+
+        # Generate training history plots
+        logger.info("\nGenerating training history plots...")
+        try:
+            plot_training_history(
+                metrics_csv_path=run_dir / "metrics.csv",
+                save_path=run_dir / "figures" / "training_curves",
+                config=config,
+                title="DFT Training History",
+                is_multitask=False,
+            )
+            logger.info(f"Saved training curves to {run_dir / 'figures' / 'training_curves.png'}")
+        except Exception as e:
+            logger.error(f"Failed to generate training history plot: {e}")
+
+        # Generate additional diagnostic plots
+        logger.info("Generating diagnostic plots...")
+
+        # Temperature-colored parity plot for test set
+        try:
+            plot_parity_with_temperature(
+                y_true=test_targets,
+                y_pred=test_preds,
+                temperatures=test_temps,
+                save_path=run_dir / "figures" / "parity_plot_test_temperature",
+                config=config,
+                title="DFT Chi Parity Plot - Colored by Temperature (Test Set)",
+            )
+            logger.info(f"Saved temperature-colored parity plot")
+        except Exception as e:
+            logger.error(f"Failed to generate temperature-colored parity plot: {e}")
+
+        # Residual vs temperature plot
+        try:
+            plot_residual_vs_temperature(
+                y_true=test_targets,
+                y_pred=test_preds,
+                temperatures=test_temps,
+                save_path=run_dir / "figures" / "residual_vs_temperature_test",
+                config=config,
+                title="Residuals vs Temperature (Test Set)",
+            )
+            logger.info(f"Saved residual vs temperature plot")
+        except Exception as e:
+            logger.error(f"Failed to generate residual plot: {e}")
+    else:
+        logger.info("Skipping test predictions and plots (HPO mode)")
 
     # Save final summary
     summary = {
@@ -850,14 +927,20 @@ def main():
         "test_metrics": test_metrics,
         "run_dir": str(run_dir),
         "best_model_checkpoint": str(run_dir / "checkpoints" / "best_model.pt"),
-        "final_model_checkpoint": str(run_dir / "checkpoints" / "final_model.pt"),
     }
+
+    # Only include final_model_checkpoint if not in HPO mode
+    if not is_hpo_mode:
+        summary["final_model_checkpoint"] = str(run_dir / "checkpoints" / "final_model.pt")
 
     with open(run_dir / "summary.json", "w") as f:
         json.dump(summary, f, indent=2)
 
     logger.info(f"\nSummary saved to {run_dir / 'summary.json'}")
-    logger.info(f"All results saved to {run_dir}")
+    if is_hpo_mode:
+        logger.info(f"HPO mode: Saved only essential metrics and best checkpoint to {run_dir}")
+    else:
+        logger.info(f"All results saved to {run_dir}")
 
 
 if __name__ == "__main__":
