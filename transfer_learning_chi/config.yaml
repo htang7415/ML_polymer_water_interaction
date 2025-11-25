@@ -1,0 +1,133 @@
+# Configuration for Transfer Learning: Polymer-Water Chi Parameter Prediction
+
+# Data paths
+data:
+  dft_csv: "Data/OMG_DFT_COSMOC_chi.csv"
+  exp_csv: "Data/Experiment_chi_data.csv"
+  dft_split_seed: 42  # Fixed seed for DFT train/val/test split
+
+# Feature settings
+features:
+  morgan_fp:
+    radius: 3
+    nBits: 1024
+  # Use all valid RDKit descriptors
+  use_all_descriptors: true
+  mc_dropout_samples: 100  # Number of MC dropout samples for evaluation
+
+# Model architecture defaults (used if not running Optuna)
+model:
+  n_layers: 3
+  hidden_dim: 128
+  dropout_rate: 0.2
+
+# Training defaults (used if not running Optuna)
+training:
+  # Pretraining on DFT
+  pretrain:
+    lr: 0.001
+    epochs: 100
+    batch_size: 256
+    weight_decay: 0.0001
+
+  # Fine-tuning on experimental data
+  finetune:
+    lr: 0.0001
+    epochs: 200
+    batch_size: 2
+    weight_decay: 0.0001
+    freeze_strategy: "all_trainable"  # "all_trainable" or "freeze_lower"
+
+  # Feature mode
+  feature_mode: "fp_desc_T"  # "fp_T", "desc_T", or "fp_desc_T"
+
+  # Experimental split seed
+  split_seed: 42
+
+# Optuna hyperparameter optimization settings
+optuna:
+  study_name: "polymer_chi_transfer_learning"
+  n_trials: 500
+  direction: "maximize"  # Maximize mean validation R²
+
+  # Hyperparameter search space
+  search_space:
+    # Feature engineering
+    feature_mode:
+      type: "categorical"
+      choices: ["fp_T", "desc_T", "fp_desc_T"]
+
+    # Model architecture
+    n_layers:
+      type: "int"
+      low: 2
+      high: 5
+
+    hidden_dim:
+      type: "categorical"
+      choices: [32, 64, 128, 256, 512]
+
+    dropout_rate:
+      type: "float"
+      low: 0.1
+      high: 0.4
+
+    # Weight decay
+    weight_decay:
+      type: "loguniform"
+      low: 1.0e-5
+      high: 1.0e-2
+
+    # Pretraining hyperparameters
+    lr_pre:
+      type: "loguniform"
+      low: 1.0e-4
+      high: 1.0e-2
+
+    epochs_pre:
+      type: "int"
+      low: 50
+      high: 200
+
+    batch_pre:
+      type: "categorical"
+      choices: [32, 64, 128, 256]
+
+    # Fine-tuning hyperparameters
+    lr_ft:
+      type: "loguniform"
+      low: 1.0e-5
+      high: 1.0e-3
+
+    epochs_ft:
+      type: "int"
+      low: 50
+      high: 500
+
+    batch_ft:
+      type: "categorical"
+      choices: [1, 2, 4, 8, 16, 32]
+
+    freeze_strategy:
+      type: "categorical"
+      choices: ["all_trainable", "freeze_lower"]
+
+    # Data split seed for experimental data
+    split_seed:
+      type: "int"
+      low: 0
+      high: 999
+
+# Output directories
+outputs:
+  hyperparameter_dir: "hyperparameter_optimization"
+  final_results_dir: "outputs"
+  plots_dir: "outputs/plots"
+
+# Plotting settings
+plotting:
+  figure_size: [4.5, 4.5]
+  font_size: 12
+  dpi: 600
+  n_bins_dft: 10  # Number of bins for DFT calibration plots
+  n_bins_exp: 5   # Number of bins for experimental calibration plots

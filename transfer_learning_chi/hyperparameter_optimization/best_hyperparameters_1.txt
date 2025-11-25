@@ -1,0 +1,33 @@
+Best Hyperparameters
+============================================================
+Best Trial Number: 42
+Best Objective (Mean CV Val R²): -0.236091
+
+Hyperparameters:
+  feature_mode: desc_T
+  n_layers: 4
+  hidden_dim: 256
+  dropout_rate: 0.35722542926094714
+  weight_decay: 0.0014593897279943041
+  lr_pre: 0.00014204095397972702
+  epochs_pre: 197
+  batch_pre: 128
+  lr_ft: 2.0198276566293276e-05
+  epochs_ft: 75
+  batch_ft: 16
+  freeze_strategy: all_trainable
+  split_seed: 623
+
+Metrics:
+  r2_dft_train: 0.932698
+  r2_dft_val: 0.912971
+  r2_dft_test: 0.918425
+  r2_cv_val_fold_0: 0.287182
+  r2_cv_val_fold_1: -1.688147
+  r2_cv_val_fold_2: 0.020575
+  r2_cv_val_fold_3: 0.503765
+  r2_cv_val_fold_4: -0.303829
+  r2_cv_val_mean: -0.236091
+  r2_cv_val_std: 0.774614
+  r2_cv_train_mean: 0.579988
+  r2_cv_train_std: 0.143335

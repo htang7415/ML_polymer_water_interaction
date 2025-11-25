@@ -1,0 +1,124 @@
+# Configuration for Polymer-Water χ Transfer Learning
+
+# Data paths
+data:
+  dft_raw: "Data/OMG_DFT_COSMOC_chi.csv"
+  exp_raw: "Data/Experiment_chi_data.csv"
+  dft_features: "DFT_features.csv"
+  exp_features: "EXP_features.csv"
+  
+
+# Feature settings
+features:
+  morgan:
+    radius: 3
+    nBits: 1024
+  # Descriptors: will use all valid RDKit descriptors
+  # List will be computed and filtered during feature computation
+
+# Global settings
+global:
+  dft_split_seed: 42  # Fixed seed for DFT train/val/test split
+  dft_train_frac: 0.8
+  dft_val_frac: 0.1
+  dft_test_frac: 0.1
+  n_folds: 5  # For experimental CV
+  mc_dropout_samples: 100  # Number of MC dropout samples for uncertainty
+
+# Optuna settings
+optuna:
+  study_name: "polymer_chi_transfer_learning"
+  n_trials: 500
+  direction: "maximize"  # Maximize mean validation R²
+  storage: "sqlite:///hyperparameter_optimization/optuna_study.db"
+
+# Hyperparameter search space for Optuna
+hyperparameters:
+  # Feature mode: which features to use
+  feature_mode:
+    type: "categorical"
+    choices: ["fp", "desc", "fp_desc"]
+
+  # Model architecture
+  n_layers:
+    type: "int"
+    low: 2
+    high: 5
+
+  hidden_dim:
+    type: "categorical"
+    choices: [32, 64, 128, 256, 512]
+
+  dropout_rate:
+    type: "float"
+    low: 0.1
+    high: 0.4
+
+  # Regularization
+  weight_decay:
+    type: "loguniform"
+    low: 1.0e-6
+    high: 1.0e-3
+
+  # Pretraining on DFT
+  lr_pre:
+    type: "loguniform"
+    low: 1.0e-5
+    high: 1.0e-2
+
+  epochs_pre:
+    type: "int"
+    low: 50
+    high: 300
+
+  batch_pre:
+    type: "categorical"
+    choices: [32, 64, 128, 256]
+
+  # Fine-tuning on experimental
+  lr_ft:
+    type: "loguniform"
+    low: 1.0e-6
+    high: 1.0e-3
+
+  epochs_ft:
+    type: "int"
+    low: 50
+    high: 500
+
+  batch_ft:
+    type: "categorical"
+    choices: [1, 2, 4, 8, 16, 32]
+
+  freeze_strategy:
+    type: "categorical"
+    choices: ["all_trainable", "freeze_lower"]
+
+  # Data split seed for experimental 5-fold CV
+  split_seed:
+    type: "int"
+    low: 0
+    high: 999
+
+# Default hyperparameters (used if no Optuna best params found)
+defaults:
+  feature_mode: "fp_desc"
+  n_layers: 3
+  hidden_dim: 128
+  dropout_rate: 0.2
+  weight_decay: 1.0e-4
+  lr_pre: 1.0e-3
+  epochs_pre: 150
+  batch_pre: 128
+  lr_ft: 1.0e-4
+  epochs_ft: 150
+  batch_ft: 16
+  freeze_strategy: "all_trainable"
+  split_seed: 42
+
+# Output settings
+outputs:
+  base_dir: "outputs"
+  plots_dir: "outputs/plots"
+  metrics_dir: "outputs/metrics"
+  models_dir: "outputs/models"
