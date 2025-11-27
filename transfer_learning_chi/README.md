@@ -130,7 +130,12 @@ chmod +x hyperparameter_optimization.sh
 
 **Output:**
 - `hyperparameter_optimization/hy.txt` - All trial results (hyperparameters and summary metrics)
-- `hyperparameter_optimization/best_hyperparameters.txt` - Best hyperparameters
+- `hyperparameter_optimization/best_hyperparameters.txt` - Best hyperparameters (updated in real-time whenever a new best trial is found)
+
+**Note:** The best hyperparameters file is automatically updated during optimization whenever a better trial is found. This means:
+- You can monitor optimization progress in real-time
+- If the process is interrupted, you still have the best results found so far
+- No need to wait for all trials to complete before accessing the best hyperparameters
 
 **Configuration:** Edit `config.yaml` to change:
 - Number of Optuna trials (`optuna.n_trials`)

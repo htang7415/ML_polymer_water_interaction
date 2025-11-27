@@ -61,7 +61,7 @@ optuna:
     n_layers:
       type: "int"
       low: 2
-      high: 5
+      high: 6
 
     hidden_dim:
       type: "categorical"
@@ -87,7 +87,7 @@ optuna:
     epochs_pre:
       type: "int"
       low: 50
-      high: 200
+      high: 80
 
     batch_pre:
       type: "categorical"

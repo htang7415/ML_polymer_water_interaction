@@ -265,6 +265,33 @@ def save_trial_to_file(study: optuna.Study, trial: optuna.Trial, output_dir: str
         f.write("\n")
 
 
+def save_best_on_new_best(study: optuna.Study, trial: optuna.Trial, output_dir: str):
+    """
+    Callback to save best hyperparameters whenever a new best trial is found.
+
+    Args:
+        study: Optuna study object
+        trial: Optuna trial object that just completed
+        output_dir: Output directory
+    """
+    # Check if this trial is complete and has a value
+    if trial.state != optuna.trial.TrialState.COMPLETE:
+        return
+
+    # Check if this is a new best trial
+    # For maximization: trial.value >= study.best_value
+    # For minimization: trial.value <= study.best_value
+    if study.direction == optuna.study.StudyDirection.MAXIMIZE:
+        is_new_best = trial.value >= study.best_value
+    else:
+        is_new_best = trial.value <= study.best_value
+
+    # If new best, save immediately
+    if is_new_best:
+        save_best_trial(study, output_dir)
+        print(f"✓ New best trial found! Trial {trial.number} with objective = {trial.value:.6f}")
+
+
 def save_best_trial(study: optuna.Study, output_dir: str):
     """
     Save best trial hyperparameters to file.
@@ -313,9 +340,10 @@ def main():
         direction=config['optuna']['direction']
     )
 
-    # Define callback to save each trial
+    # Define callback to save each trial and update best if needed
     def callback(study, trial):
         save_trial_to_file(study, trial, output_dir)
+        save_best_on_new_best(study, trial, output_dir)
 
     # Run optimization
     n_trials = config['optuna']['n_trials']
