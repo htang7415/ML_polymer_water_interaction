@@ -36,7 +36,7 @@ training:
     epochs: 200
     batch_size: 2
     weight_decay: 0.0001
-    freeze_strategy: "all_trainable"  # "all_trainable" or "freeze_lower"
+    n_freeze_layers: 0  # Number of hidden layers to freeze (0 = all trainable, n_layers = only output trainable)
 
   # Feature mode
   feature_mode: "fp_desc_T"  # "fp_T", "desc_T", or "fp_desc_T"
@@ -47,7 +47,7 @@ training:
 # Optuna hyperparameter optimization settings
 optuna:
   study_name: "polymer_chi_transfer_learning"
-  n_trials: 500
+  n_trials: 1000
   direction: "maximize"  # Maximize mean validation R²
 
   # Hyperparameter search space
@@ -61,7 +61,7 @@ optuna:
     n_layers:
       type: "int"
       low: 2
-      high: 6
+      high: 7
 
     hidden_dim:
       type: "categorical"
@@ -86,12 +86,12 @@ optuna:
 
     epochs_pre:
       type: "int"
-      low: 50
-      high: 80
+      low: 60
+      high: 60
 
     batch_pre:
       type: "categorical"
-      choices: [32, 64, 128, 256]
+      choices: [128, 256]
 
     # Fine-tuning hyperparameters
     lr_ft:
@@ -101,16 +101,15 @@ optuna:
 
     epochs_ft:
       type: "int"
-      low: 50
-      high: 500
+      low: 1000
+      high: 1000
 
     batch_ft:
       type: "categorical"
       choices: [1, 2, 4, 8, 16, 32]
 
-    freeze_strategy:
-      type: "categorical"
-      choices: ["all_trainable", "freeze_lower"]
+    # n_freeze_layers is sampled dynamically in optuna_objective.py
+    # Range: 0 to n_layers (sampled based on the n_layers hyperparameter)
 
     # Data split seed for experimental data
     split_seed:

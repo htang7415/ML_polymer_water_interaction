@@ -116,7 +116,7 @@ def get_hyperparameters(config):
             'lr_ft': config['training']['finetune']['lr'],
             'epochs_ft': config['training']['finetune']['epochs'],
             'batch_ft': config['training']['finetune']['batch_size'],
-            'freeze_strategy': config['training']['finetune']['freeze_strategy'],
+            'n_freeze_layers': config['training']['finetune']['n_freeze_layers'],
             'split_seed': config['training']['split_seed'],
         }
 

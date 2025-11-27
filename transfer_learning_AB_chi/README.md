@@ -120,7 +120,7 @@ This performs Bayesian optimization over:
 - Model architecture (layers, hidden dimensions, dropout)
 - Training hyperparameters (learning rates, batch sizes, epochs)
 - Regularization (weight decay)
-- Transfer learning strategy (freeze layers or train all)
+- Transfer learning strategy (number of layers to freeze: 0 to n_layers)
 
 Results are saved incrementally to:
 - `hyperparameter_optimization/hy.txt`: All trial results (updated after each trial)
@@ -224,10 +224,14 @@ The model uses **MC Dropout** for uncertainty estimation:
 
 2. **Fine-tuning Phase**:
    - Initialize with pretrained weights
-   - Apply freeze strategy:
-     - `all_trainable`: All parameters are trainable
-     - `freeze_lower`: Freeze all layers except the output layer
+   - Apply flexible layer freezing strategy:
+     - `n_freeze_layers`: Number of hidden layers to freeze from input side (0 to n_layers)
+     - 0 = all layers trainable
+     - 1-3 = freeze first 1-3 layers, train remaining layers + output
+     - n_layers = freeze all hidden layers, only output trainable
    - Fine-tune on small experimental dataset
+
+The flexible freezing strategy allows Optuna to find the optimal balance between preserving pretrained knowledge (frozen layers) and adapting to experimental data (trainable layers).
 
 ## Performance Evaluation
 

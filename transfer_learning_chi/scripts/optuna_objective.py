@@ -108,9 +108,11 @@ def sample_hyperparameters(trial: optuna.Trial, config: Dict) -> Dict:
         search_space['batch_ft']['choices']
     )
 
-    hyperparams['freeze_strategy'] = trial.suggest_categorical(
-        'freeze_strategy',
-        search_space['freeze_strategy']['choices']
+    # Number of layers to freeze (depends on n_layers)
+    hyperparams['n_freeze_layers'] = trial.suggest_int(
+        'n_freeze_layers',
+        0,
+        hyperparams['n_layers']
     )
 
     # Data split seed

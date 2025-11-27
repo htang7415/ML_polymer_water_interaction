@@ -9,6 +9,7 @@ import yaml
 import numpy as np
 import pandas as pd
 import optuna
+from optuna.trial import FrozenTrial
 import torch
 import torch.optim as optim
 import os
@@ -35,10 +36,26 @@ def sample_hyperparameters(trial: optuna.Trial, config: Dict[str, Any]) -> Dict[
     hp_space = config['hyperparameters']
     hp = {}
 
+    # Sample n_layers first (needed for n_freeze_layers dependency)
+    n_layers = None
+    if 'n_layers' in hp_space:
+        param_config = hp_space['n_layers']
+        n_layers = trial.suggest_int('n_layers', param_config['low'], param_config['high'])
+        hp['n_layers'] = n_layers
+
+    # Sample all other parameters
     for param_name, param_config in hp_space.items():
+        if param_name == 'n_layers':
+            continue  # Already sampled above
+
         param_type = param_config['type']
 
-        if param_type == 'categorical':
+        # Special handling for n_freeze_layers - cap at actual n_layers
+        if param_name == 'n_freeze_layers' and n_layers is not None:
+            # Cap the upper bound at the sampled n_layers value
+            max_freeze = min(param_config['high'], n_layers)
+            hp[param_name] = trial.suggest_int(param_name, param_config['low'], max_freeze)
+        elif param_type == 'categorical':
             hp[param_name] = trial.suggest_categorical(param_name, param_config['choices'])
         elif param_type == 'int':
             hp[param_name] = trial.suggest_int(param_name, param_config['low'], param_config['high'])
@@ -200,10 +217,7 @@ def run_finetuning_cv(
         model.load_state_dict(pretrain_results['model'].state_dict())
 
         # Apply freeze strategy
-        if hp['freeze_strategy'] == 'freeze_lower':
-            model.freeze_lower_layers()
-        else:  # 'all_trainable'
-            model.unfreeze_all()
+        model.freeze_n_layers(hp['n_freeze_layers'])
 
         # Create optimizer and criterion
         optimizer = optim.AdamW(model.parameters(), lr=hp['lr_ft'], weight_decay=hp['weight_decay'])
@@ -419,7 +433,7 @@ class SaveResultsCallback:
             with open(self.output_file, 'w') as f:
                 f.write("Trial\tObjective_R2\tDFT_Train_R2\tDFT_Val_R2\tDFT_Test_R2\tCV_Train_R2_Mean\tCV_Val_R2_Mean\tHyperparameters\n")
 
-    def __call__(self, study: optuna.Study, trial: optuna.FrozenTrial):
+    def __call__(self, study: optuna.Study, trial: FrozenTrial):
         """
         Called after each trial completes.
 

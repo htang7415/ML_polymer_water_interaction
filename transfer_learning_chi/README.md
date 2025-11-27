@@ -76,9 +76,11 @@ The MSE loss is optimized using the AdamW optimizer with configurable learning r
 ### Fine-tuning (Experimental Data)
 - 5-fold cross-validation based on unique polymers
 - Configurable batch size (optimized via hyperparameter search)
-- Two freezing strategies:
-  - `all_trainable`: All parameters are updated
-  - `freeze_lower`: Only the final layer is updated
+- Layer-wise freezing strategy:
+  - `n_freeze_layers`: Number of hidden layers to freeze (0 to n_layers)
+  - 0 = all layers trainable
+  - n_layers = freeze all hidden layers (only output trainable)
+  - Values in between allow fine-grained control over transfer learning
 - No early stopping - trains for a fixed number of epochs per fold
 
 ### Hyperparameter Optimization
@@ -89,7 +91,7 @@ The MSE loss is optimized using the AdamW optimizer with configurable learning r
   - Pretraining: learning rate, epochs, batch size
   - Fine-tuning: learning rate, epochs, batch size
   - Weight decay
-  - Freezing strategy
+  - Number of layers to freeze (0 to n_layers)
   - Random seed for experimental data splitting
 
 ## Usage

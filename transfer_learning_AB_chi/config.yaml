@@ -28,7 +28,7 @@ global:
 # Optuna settings
 optuna:
   study_name: "polymer_chi_transfer_learning"
-  n_trials: 500
+  n_trials: 1000
   direction: "maximize"  # Maximize mean validation R²
   storage: "sqlite:///hyperparameter_optimization/optuna_study.db"
 
@@ -43,7 +43,7 @@ hyperparameters:
   n_layers:
     type: "int"
     low: 2
-    high: 6
+    high: 7
 
   hidden_dim:
     type: "categorical"
@@ -68,12 +68,12 @@ hyperparameters:
 
   epochs_pre:
     type: "int"
-    low: 50
-    high: 80
+    low: 60
+    high: 60
 
   batch_pre:
     type: "categorical"
-    choices: [32, 64, 128, 256]
+    choices: [128, 256]
 
   # Fine-tuning on experimental
   lr_ft:
@@ -83,16 +83,19 @@ hyperparameters:
 
   epochs_ft:
     type: "int"
-    low: 50
-    high: 500
+    low: 1000
+    high: 1000
 
   batch_ft:
     type: "categorical"
     choices: [1, 2, 4, 8, 16, 32]
 
-  freeze_strategy:
-    type: "categorical"
-    choices: ["all_trainable", "freeze_lower"]
+  # Number of layers to freeze from input side (0 to n_layers)
+  # 0 = all trainable, n_layers = freeze all hidden layers (only output trainable)
+  n_freeze_layers:
+    type: "int"
+    low: 0
+    high: 7  # Should match or exceed n_layers high value
 
   # Data split seed for experimental 5-fold CV
   split_seed:
@@ -113,7 +116,7 @@ defaults:
   lr_ft: 1.0e-4
   epochs_ft: 150
   batch_ft: 16
-  freeze_strategy: "all_trainable"
+  n_freeze_layers: 0  # All trainable by default
   split_seed: 42
 
 # Output settings

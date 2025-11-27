@@ -126,30 +126,38 @@ def evaluate_mc_dropout(
     return mu, sigma, metrics
 
 
-def apply_freeze_strategy(model: ChiMLP, freeze_strategy: str):
+def apply_freeze_strategy(model: ChiMLP, n_freeze_layers: int):
     """
-    Apply freezing strategy to model parameters.
+    Apply layer-wise freezing strategy to model parameters.
 
     Args:
         model: ChiMLP model
-        freeze_strategy: "all_trainable" or "freeze_lower"
+        n_freeze_layers: Number of hidden layers to freeze (0 to model.n_layers)
+                        0 = all layers trainable
+                        model.n_layers = freeze all hidden layers (only output trainable)
     """
-    if freeze_strategy == "all_trainable":
-        # All parameters are trainable
-        for param in model.parameters():
-            param.requires_grad = True
+    # Validate input
+    if not 0 <= n_freeze_layers <= model.n_layers:
+        raise ValueError(f"n_freeze_layers must be between 0 and {model.n_layers}, got {n_freeze_layers}")
 
-    elif freeze_strategy == "freeze_lower":
-        # Freeze all hidden layers, keep only output layer trainable
-        for param in model.hidden_layers.parameters():
-            param.requires_grad = False
-        for param in model.output_layer.parameters():
-            param.requires_grad = True
+    # First, make all parameters trainable
+    for param in model.parameters():
+        param.requires_grad = True
 
-    else:
-        raise ValueError(f"Invalid freeze_strategy: {freeze_strategy}")
+    # Then freeze the first n_freeze_layers
+    # Each hidden layer has 3 components: Linear, ReLU, Dropout
+    if n_freeze_layers > 0:
+        components_per_layer = 3
+        n_components_to_freeze = n_freeze_layers * components_per_layer
+
+        # Freeze the first n_components_to_freeze in hidden_layers
+        for i, module in enumerate(model.hidden_layers):
+            if i < n_components_to_freeze:
+                for param in module.parameters():
+                    param.requires_grad = False
 
     # Count trainable parameters
     n_trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     n_total = sum(p.numel() for p in model.parameters())
-    print(f"Freeze strategy '{freeze_strategy}': {n_trainable}/{n_total} parameters trainable")
+    print(f"Layer-wise freezing: {n_freeze_layers}/{model.n_layers} hidden layers frozen, "
+          f"{n_trainable}/{n_total} parameters trainable")

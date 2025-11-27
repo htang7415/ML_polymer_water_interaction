@@ -208,7 +208,7 @@ def finetune_on_exp(
     weight_decay = hyperparams['weight_decay']
     epochs = hyperparams['epochs_ft']
     batch_size = hyperparams.get('batch_ft', 32)  # Use hyperparameter or default to 32
-    freeze_strategy = hyperparams['freeze_strategy']
+    n_freeze_layers = hyperparams['n_freeze_layers']
 
     n_mc_samples = config['features']['mc_dropout_samples']
 
@@ -222,8 +222,8 @@ def finetune_on_exp(
         # Create new model with same architecture and load pretrained weights
         model = copy.deepcopy(pretrained_model).to(device)
 
-        # Apply freeze strategy
-        apply_freeze_strategy(model, freeze_strategy)
+        # Apply layer-wise freezing
+        apply_freeze_strategy(model, n_freeze_layers)
 
         # Optimizer and loss
         optimizer = torch.optim.AdamW(

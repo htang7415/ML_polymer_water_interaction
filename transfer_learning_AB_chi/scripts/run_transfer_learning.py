@@ -73,6 +73,16 @@ def load_best_hyperparameters(best_params_file: str, config: Dict[str, Any]) -> 
                                 # String
                                 hp[key] = value
 
+        # Backward compatibility: convert old freeze_strategy to n_freeze_layers
+        if 'freeze_strategy' in hp and 'n_freeze_layers' not in hp:
+            if hp['freeze_strategy'] == 'all_trainable':
+                hp['n_freeze_layers'] = 0
+            elif hp['freeze_strategy'] == 'freeze_lower':
+                # Freeze all hidden layers (use n_layers if available, otherwise default to max)
+                hp['n_freeze_layers'] = hp.get('n_layers', 7)
+            print(f"Converted freeze_strategy='{hp['freeze_strategy']}' to n_freeze_layers={hp['n_freeze_layers']}")
+            del hp['freeze_strategy']
+
         print(f"Loaded hyperparameters: {hp}")
         return hp
 
@@ -339,10 +349,7 @@ def main():
         model_fold.load_state_dict(model.state_dict())
 
         # Apply freeze strategy
-        if hp['freeze_strategy'] == 'freeze_lower':
-            model_fold.freeze_lower_layers()
-        else:  # 'all_trainable'
-            model_fold.unfreeze_all()
+        model_fold.freeze_n_layers(hp['n_freeze_layers'])
 
         # Create optimizer and criterion
         optimizer_fold = optim.AdamW(model_fold.parameters(), lr=hp['lr_ft'], weight_decay=hp['weight_decay'])

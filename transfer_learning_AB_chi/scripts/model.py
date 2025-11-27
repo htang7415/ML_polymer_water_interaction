@@ -100,32 +100,48 @@ class ChiModel(nn.Module):
         chi = A / T + B
         return chi
 
-    def freeze_lower_layers(self):
+    def freeze_n_layers(self, n_freeze: int):
         """
-        Freeze all layers except the last (output) layer.
+        Freeze the first n_freeze hidden layers from the input side.
 
-        Used for transfer learning with freeze_strategy='freeze_lower'.
+        Used for transfer learning with flexible layer freezing.
+
+        Args:
+            n_freeze: Number of hidden layers to freeze (0 to n_layers)
+                      0 = all layers trainable
+                      n_layers = freeze all hidden layers, only output trainable
+
+        Layer structure:
+            network[0:3]   = Layer 0 (Linear, ReLU, Dropout)
+            network[3:6]   = Layer 1 (Linear, ReLU, Dropout)
+            ...
+            network[-1]    = Output layer (Linear only)
         """
-        # Freeze all layers
-        for param in self.parameters():
-            param.requires_grad = False
-
-        # Unfreeze the last layer
-        for param in self.network[-1].parameters():
-            param.requires_grad = True
-
-        print("Froze all layers except the output layer")
-
-    def unfreeze_all(self):
-        """
-        Unfreeze all layers.
-
-        Used for transfer learning with freeze_strategy='all_trainable'.
-        """
+        # First, unfreeze all layers
         for param in self.parameters():
             param.requires_grad = True
 
-        print("All layers are trainable")
+        # Then freeze the first n_freeze layers
+        # Each hidden layer consists of 3 elements: Linear, ReLU, Dropout
+        if n_freeze > 0:
+            n_freeze = min(n_freeze, self.n_layers)  # Cap at actual number of layers
+
+            # Freeze parameters in the first n_freeze hidden layer blocks
+            for layer_idx in range(n_freeze):
+                start_idx = layer_idx * 3
+                end_idx = start_idx + 3
+
+                for module in self.network[start_idx:end_idx]:
+                    if hasattr(module, 'parameters'):
+                        for param in module.parameters():
+                            param.requires_grad = False
+
+        if n_freeze == 0:
+            print("All layers are trainable")
+        elif n_freeze == self.n_layers:
+            print(f"Froze all {n_freeze} hidden layers, only output layer is trainable")
+        else:
+            print(f"Froze first {n_freeze} hidden layer(s), remaining {self.n_layers - n_freeze} hidden + output are trainable")
 
     def get_num_trainable_params(self) -> int:
         """
@@ -217,10 +233,13 @@ if __name__ == '__main__':
     print("\n=== Testing layer freezing ===")
     print(f"Initial trainable params: {model.get_num_trainable_params():,}")
 
-    model.freeze_lower_layers()
-    print(f"After freezing lower layers: {model.get_num_trainable_params():,}")
+    model.freeze_n_layers(0)
+    print(f"After freeze_n_layers(0): {model.get_num_trainable_params():,}")
 
-    model.unfreeze_all()
-    print(f"After unfreezing all: {model.get_num_trainable_params():,}")
+    model.freeze_n_layers(1)
+    print(f"After freeze_n_layers(1): {model.get_num_trainable_params():,}")
+
+    model.freeze_n_layers(2)
+    print(f"After freeze_n_layers(2): {model.get_num_trainable_params():,}")
 
     print("\nModel test completed successfully!")
