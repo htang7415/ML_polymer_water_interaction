@@ -402,6 +402,60 @@ def save_best_params(study: optuna.Study, output_dir: str):
     print(f"Saved best hyperparameters to {output_file}")
 
 
+class SaveResultsCallback:
+    """
+    Optuna callback to save results after each trial.
+
+    This ensures incremental saving so no data is lost if the optimization
+    is interrupted or crashes.
+    """
+    def __init__(self, output_dir: str):
+        self.output_dir = output_dir
+        self.output_file = os.path.join(output_dir, 'hy.txt')
+        os.makedirs(output_dir, exist_ok=True)
+
+        # Initialize file with header if it doesn't exist
+        if not os.path.exists(self.output_file):
+            with open(self.output_file, 'w') as f:
+                f.write("Trial\tObjective_R2\tDFT_Train_R2\tDFT_Val_R2\tDFT_Test_R2\tCV_Train_R2_Mean\tCV_Val_R2_Mean\tHyperparameters\n")
+
+    def __call__(self, study: optuna.Study, trial: optuna.FrozenTrial):
+        """
+        Called after each trial completes.
+
+        Args:
+            study: Optuna study
+            trial: Completed trial
+        """
+        # Append this trial's results to hy.txt
+        with open(self.output_file, 'a') as f:
+            # Format hyperparameters as compact string
+            hp_str = ", ".join([f"{k}={v}" for k, v in trial.params.items()])
+
+            # Get R² values, handle None/missing values
+            obj_val = trial.value if trial.value is not None else float('nan')
+            dft_train = trial.user_attrs.get('r2_dft_train', float('nan'))
+            dft_val = trial.user_attrs.get('r2_dft_val', float('nan'))
+            dft_test = trial.user_attrs.get('r2_dft_test', float('nan'))
+            cv_train = trial.user_attrs.get('r2_cv_train_mean', float('nan'))
+            cv_val = trial.user_attrs.get('r2_cv_val_mean', float('nan'))
+
+            f.write(f"{trial.number}\t"
+                   f"{obj_val:.4f}\t"
+                   f"{dft_train:.4f}\t"
+                   f"{dft_val:.4f}\t"
+                   f"{dft_test:.4f}\t"
+                   f"{cv_train:.4f}\t"
+                   f"{cv_val:.4f}\t"
+                   f"{hp_str}\n")
+
+        # Update best hyperparameters if this is the best trial so far
+        if study.best_trial.number == trial.number:
+            save_best_params(study, self.output_dir)
+
+        print(f"Saved trial {trial.number} to {self.output_file}")
+
+
 def main():
     """Main function to run Optuna optimization."""
     parser = argparse.ArgumentParser(description='Run Optuna hyperparameter optimization')
@@ -419,8 +473,13 @@ def main():
         direction=config['optuna']['direction']
     )
 
-    # Run optimization
-    study.optimize(objective, n_trials=config['optuna']['n_trials'])
+    # Create callback for incremental saving
+    output_dir = 'hyperparameter_optimization'
+    callback = SaveResultsCallback(output_dir)
+
+    # Run optimization with callback
+    print(f"Results will be saved incrementally to {output_dir}/hy.txt after each trial")
+    study.optimize(objective, n_trials=config['optuna']['n_trials'], callbacks=[callback])
 
     # Print best results
     print("\n" + "=" * 80)
@@ -432,8 +491,7 @@ def main():
     for key, value in study.best_params.items():
         print(f"  {key}: {value}")
 
-    # Save results
-    output_dir = 'hyperparameter_optimization'
+    # Save results (backup - already saved incrementally during optimization)
     save_trial_results(study, output_dir)
     save_best_params(study, output_dir)
 

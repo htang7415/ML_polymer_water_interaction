@@ -229,16 +229,18 @@ def plot_calibration(
     # Plot
     fig, ax = plt.subplots(figsize=(4.5, 4.5))
 
-    ax.scatter(mean_stds, mean_errors, s=50, alpha=0.7, edgecolors='black', linewidth=0.5)
+    # Plot calibration curve with line and markers
+    ax.plot(mean_stds, mean_errors, 'o-', color='#1f77b4', linewidth=2,
+            markersize=8, markerfacecolor='#1f77b4', markeredgecolor='#1f77b4')
 
     # Add diagonal line (perfect calibration)
     max_val = max(mean_stds.max(), mean_errors.max())
-    ax.plot([0, max_val], [0, max_val], 'k--', linewidth=1, alpha=0.5, label='Perfect calibration')
+    ax.plot([0, max_val], [0, max_val], 'k--', linewidth=1.5, alpha=0.7, label='Perfect calibration')
 
-    ax.set_xlabel('Mean Predicted σ')
-    ax.set_ylabel('Mean Absolute Error')
+    ax.set_xlabel('Mean Predicted σ (per bin)')
+    ax.set_ylabel('Mean Absolute Error (per bin)')
     ax.set_title(title)
-    ax.legend()
+    ax.legend(frameon=True, fancybox=True, shadow=False)
 
     plt.tight_layout()
     plt.savefig(save_path, dpi=300, bbox_inches='tight')

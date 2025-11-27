@@ -122,12 +122,14 @@ This performs Bayesian optimization over:
 - Regularization (weight decay)
 - Transfer learning strategy (freeze layers or train all)
 
-Results are saved in:
-- `hyperparameter_optimization/all_trials.txt`: All trial results
-- `hyperparameter_optimization/best_hyperparameters.txt`: Best hyperparameters
-- `hyperparameter_optimization/optuna_study.db`: Optuna study database
+Results are saved incrementally to:
+- `hyperparameter_optimization/hy.txt`: All trial results (updated after each trial)
+- `hyperparameter_optimization/best_hyperparameters.txt`: Best hyperparameters (updated when improved)
 
-**Note**: This step can take considerable time depending on the number of trials (configured in `config.yaml`).
+**Note**:
+- Results are saved incrementally after each trial completes, so you won't lose progress if the optimization is interrupted
+- This step can take considerable time depending on the number of trials (configured in `config.yaml`)
+- You can monitor progress in real-time by watching `hy.txt` with: `tail -f hyperparameter_optimization/hy.txt`
 
 ### Step 3: Transfer Learning
 
