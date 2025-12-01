@@ -1,10 +1,9 @@
-# Configuration for Transfer Learning: Polymer-Water Chi Parameter Prediction
+# Configuration for Direct Learning: Polymer-Water Chi Parameter Prediction
+# Training directly on experimental data without transfer learning
 
 # Data paths
 data:
-  dft_csv: "Data/OMG_DFT_COSMOC_chi.csv"
-  exp_csv: "Data/Experiment_chi_data.csv"
-  dft_split_seed: 42  # Fixed seed for DFT train/val/test split
+  exp_csv: "../Data/Experiment_chi_data.csv"
 
 # Feature settings
 features:
@@ -23,20 +22,11 @@ model:
 
 # Training defaults (used if not running Optuna)
 training:
-  # Pretraining on DFT
-  pretrain:
-    lr: 0.001
-    epochs: 100
-    batch_size: 256
-    weight_decay: 0.0001
-
-  # Fine-tuning on experimental data
-  finetune:
-    lr: 0.0001
-    epochs: 200
-    batch_size: 2
-    weight_decay: 0.0001
-    n_freeze_layers: 0  # Number of hidden layers to freeze (0 = all trainable, n_layers = only output trainable)
+  # Direct training on experimental data
+  lr: 0.0001
+  epochs: 200
+  batch_size: 4
+  weight_decay: 0.0001
 
   # Feature mode
   feature_mode: "fp_desc_T"  # "fp_T", "desc_T", or "fp_desc_T"
@@ -46,7 +36,7 @@ training:
 
 # Optuna hyperparameter optimization settings
 optuna:
-  study_name: "polymer_chi_transfer_learning"
+  study_name: "polymer_chi_direct_learning"
   n_trials: 1000
   direction: "maximize"  # Maximize mean validation R²
 
@@ -78,38 +68,20 @@ optuna:
       low: 1.0e-5
       high: 1.0e-2
 
-    # Pretraining hyperparameters
-    lr_pre:
-      type: "loguniform"
-      low: 1.0e-4
-      high: 1.0e-2
-
-    epochs_pre:
-      type: "int"
-      low: 60
-      high: 60
-
-    batch_pre:
-      type: "categorical"
-      choices: [128, 256]
-
-    # Fine-tuning hyperparameters
-    lr_ft:
+    # Training hyperparameters
+    lr:
       type: "loguniform"
       low: 1.0e-5
       high: 1.0e-3
 
-    epochs_ft:
+    epochs:
       type: "int"
       low: 1000
       high: 1000
 
-    batch_ft:
+    batch_size:
       type: "categorical"
       choices: [1, 2, 4, 8, 16, 32]
-
-    # n_freeze_layers is sampled dynamically in optuna_objective.py
-    # Range: 0 to n_layers (sampled based on the n_layers hyperparameter)
 
     # Data split seed for experimental data
     split_seed:
@@ -120,13 +92,12 @@ optuna:
 # Output directories
 outputs:
   hyperparameter_dir: "hyperparameter_optimization"
-  final_results_dir: "outputs"
-  plots_dir: "outputs/plots"
+  results_dir: "Results"
+  figures_dir: "Figures"
 
 # Plotting settings
 plotting:
   figure_size: [4.5, 4.5]
   font_size: 12
   dpi: 600
-  n_bins_dft: 10  # Number of bins for DFT calibration plots
   n_bins_exp: 5   # Number of bins for experimental calibration plots

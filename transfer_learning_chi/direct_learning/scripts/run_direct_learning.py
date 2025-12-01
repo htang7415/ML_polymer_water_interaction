@@ -1,24 +1,28 @@
 """
-Run final transfer learning training and evaluation with best hyperparameters.
+Run final direct learning training and evaluation with best hyperparameters.
 """
 
 import yaml
 import os
 import torch
 import json
-import numpy as np
+import sys
 
-from data_utils import get_dft_splits, get_exp_data, create_5fold_polymer_split
+# Import from parent folder - use absolute path
+script_dir = os.path.dirname(os.path.abspath(__file__))
+parent_scripts_dir = os.path.join(script_dir, '../../scripts')
+sys.path.insert(0, os.path.abspath(parent_scripts_dir))
+
+from data_utils import get_exp_data, create_5fold_polymer_split
 from features import FeatureBuilder
-from train import pretrain_on_dft, finetune_on_exp
 from plotting import (
     setup_plot_style,
-    plot_training_curves,
-    plot_parity,
     plot_parity_folds,
-    plot_calibration,
     plot_calibration_folds
 )
+
+# Import from current folder
+from train_direct import train_on_exp_direct
 
 
 def load_config(config_path: str = '../config.yaml'):
@@ -119,14 +123,10 @@ def get_hyperparameters(config):
             'n_layers': config['model']['n_layers'],
             'hidden_dims': config['model']['hidden_dims'],
             'dropout_rate': config['model']['dropout_rate'],
-            'weight_decay': config['training']['pretrain']['weight_decay'],
-            'lr_pre': config['training']['pretrain']['lr'],
-            'epochs_pre': config['training']['pretrain']['epochs'],
-            'batch_pre': config['training']['pretrain']['batch_size'],
-            'lr_ft': config['training']['finetune']['lr'],
-            'epochs_ft': config['training']['finetune']['epochs'],
-            'batch_ft': config['training']['finetune']['batch_size'],
-            'n_freeze_layers': config['training']['finetune']['n_freeze_layers'],
+            'weight_decay': config['training']['weight_decay'],
+            'lr': config['training']['lr'],
+            'epochs': config['training']['epochs'],
+            'batch_size': config['training']['batch_size'],
             'split_seed': config['training']['split_seed'],
         }
 
@@ -137,21 +137,15 @@ def get_hyperparameters(config):
     return hyperparams
 
 
-def save_metrics(dft_results, exp_results, output_dir):
+def save_metrics(exp_results, output_dir):
     """
     Save all metrics to JSON file.
 
     Args:
-        dft_results: Results from DFT pretraining
-        exp_results: Results from experimental fine-tuning
+        exp_results: Results from direct learning
         output_dir: Output directory
     """
     metrics = {
-        'dft': {
-            'train': dft_results['train_metrics'],
-            'val': dft_results['val_metrics'],
-            'test': dft_results['test_metrics'],
-        },
         'experimental': {
             'r2_val_mean': exp_results['r2_val_mean'],
             'r2_val_std': exp_results['r2_val_std'],
@@ -175,75 +169,34 @@ def save_metrics(dft_results, exp_results, output_dir):
     print(f"\nMetrics saved to {metrics_file}")
 
 
-def generate_all_plots(dft_results, exp_results, y_dft_train, y_dft_val, y_dft_test, config, output_dir):
+def generate_all_plots(exp_results, config, output_dir):
     """
     Generate all plots.
 
     Args:
-        dft_results: Results from DFT pretraining
-        exp_results: Results from experimental fine-tuning
-        y_dft_train, y_dft_val, y_dft_test: True DFT targets
+        exp_results: Results from direct learning
         config: Configuration dictionary
         output_dir: Output directory
     """
     setup_plot_style(config)
 
-    plots_dir = os.path.join(output_dir, 'plots')
+    plots_dir = os.path.join(output_dir, config['outputs']['figures_dir'])
     os.makedirs(plots_dir, exist_ok=True)
 
     print("\nGenerating plots...")
-
-    # DFT training curves
-    plot_training_curves(
-        dft_results['train_losses'],
-        dft_results['val_losses'],
-        os.path.join(plots_dir, 'dft_training_curves.png'),
-        config
-    )
-
-    # DFT parity plots
-    for split_name, y_true in [('train', y_dft_train), ('val', y_dft_val), ('test', y_dft_test)]:
-        pred_data = dft_results[f'{split_name}_predictions']
-        metrics = dft_results[f'{split_name}_metrics']
-
-        plot_parity(
-            y_true,
-            pred_data['mu'],
-            pred_data['sigma'],
-            metrics,
-            f'DFT {split_name.capitalize()}',
-            os.path.join(plots_dir, f'dft_{split_name}_parity.png'),
-            config,
-            figsize=(5.5, 4.5)  # Larger size for DFT parity plots
-        )
-
-    # DFT calibration plots
-    n_bins_dft = config['plotting']['n_bins_dft']
-    for split_name, y_true in [('train', y_dft_train), ('val', y_dft_val), ('test', y_dft_test)]:
-        pred_data = dft_results[f'{split_name}_predictions']
-
-        plot_calibration(
-            y_true,
-            pred_data['mu'],
-            pred_data['sigma'],
-            f'DFT {split_name.capitalize()} Calibration',
-            os.path.join(plots_dir, f'dft_{split_name}_calibration.png'),
-            config,
-            n_bins_dft
-        )
 
     # Experimental fold parity plots
     plot_parity_folds(
         exp_results['fold_results'],
         'train',
-        os.path.join(plots_dir, 'exp_train_parity.png'),
+        os.path.join(plots_dir, 'direct_train_parity.png'),
         config
     )
 
     plot_parity_folds(
         exp_results['fold_results'],
         'val',
-        os.path.join(plots_dir, 'exp_val_parity.png'),
+        os.path.join(plots_dir, 'direct_val_parity.png'),
         config
     )
 
@@ -251,14 +204,14 @@ def generate_all_plots(dft_results, exp_results, y_dft_train, y_dft_val, y_dft_t
     plot_calibration_folds(
         exp_results['fold_results'],
         'train',
-        os.path.join(plots_dir, 'exp_train_calibration.png'),
+        os.path.join(plots_dir, 'direct_train_calibration.png'),
         config
     )
 
     plot_calibration_folds(
         exp_results['fold_results'],
         'val',
-        os.path.join(plots_dir, 'exp_val_calibration.png'),
+        os.path.join(plots_dir, 'direct_val_calibration.png'),
         config
     )
 
@@ -267,10 +220,10 @@ def generate_all_plots(dft_results, exp_results, y_dft_train, y_dft_val, y_dft_t
 
 def main():
     """
-    Run final transfer learning training and evaluation.
+    Run final direct learning training and evaluation.
     """
     print("=" * 60)
-    print("Transfer Learning: Final Training and Evaluation")
+    print("Direct Learning: Final Training and Evaluation")
     print("=" * 60)
 
     # Load config
@@ -286,14 +239,11 @@ def main():
     # Create output directory (relative to project root, not script location)
     script_dir = os.path.dirname(os.path.abspath(__file__))
     project_dir = os.path.dirname(script_dir)
-    output_dir = os.path.join(project_dir, config['outputs']['final_results_dir'])
+    output_dir = os.path.join(project_dir, config['outputs']['results_dir'])
     os.makedirs(output_dir, exist_ok=True)
 
-    # Load and split DFT data
-    print("\n" + "=" * 60)
-    dft_train_df, dft_val_df, dft_test_df = get_dft_splits(config)
-
     # Load experimental data
+    print("\n" + "=" * 60)
     exp_df = get_exp_data(config)
 
     # Build features
@@ -302,24 +252,8 @@ def main():
     feature_builder = FeatureBuilder(config)
     feature_mode = hyperparams['feature_mode']
 
-    # Fit descriptor scaler on DFT train
-    feature_builder.fit_descriptor_scaler(dft_train_df)
-
-    # Build DFT features
-    X_dft_train, y_dft_train = feature_builder.build_features(dft_train_df, feature_mode)
-    X_dft_val, y_dft_val = feature_builder.build_features(dft_val_df, feature_mode)
-    X_dft_test, y_dft_test = feature_builder.build_features(dft_test_df, feature_mode)
-
-    # Pretrain on DFT
-    print("\n" + "=" * 60)
-    pretrained_model, dft_results = pretrain_on_dft(
-        X_dft_train, y_dft_train,
-        X_dft_val, y_dft_val,
-        X_dft_test, y_dft_test,
-        hyperparams,
-        config,
-        device
-    )
+    # Fit descriptor scaler on all experimental data
+    feature_builder.fit_descriptor_scaler(exp_df)
 
     # Create 5-fold split for experimental data
     print("\n" + "=" * 60)
@@ -332,10 +266,9 @@ def main():
         X_val, y_val = feature_builder.build_features(val_df, feature_mode)
         exp_folds_features.append((X_train, y_train, X_val, y_val))
 
-    # Fine-tune on experimental data
+    # Train directly on experimental data
     print("\n" + "=" * 60)
-    exp_results = finetune_on_exp(
-        pretrained_model,
+    exp_results = train_on_exp_direct(
         exp_folds_features,
         hyperparams,
         config,
@@ -344,16 +277,12 @@ def main():
 
     # Save metrics
     print("\n" + "=" * 60)
-    save_metrics(dft_results, exp_results, output_dir)
+    save_metrics(exp_results, output_dir)
 
     # Generate plots
     print("\n" + "=" * 60)
     generate_all_plots(
-        dft_results,
         exp_results,
-        y_dft_train,
-        y_dft_val,
-        y_dft_test,
         config,
         output_dir
     )
@@ -362,12 +291,8 @@ def main():
     print("\n" + "=" * 60)
     print("Final Results Summary")
     print("=" * 60)
-    print("\nDFT Pretraining:")
-    print(f"  Train R²: {dft_results['train_metrics']['r2']:.4f}")
-    print(f"  Val R²:   {dft_results['val_metrics']['r2']:.4f}")
-    print(f"  Test R²:  {dft_results['test_metrics']['r2']:.4f}")
 
-    print("\nExperimental Fine-tuning (5-fold CV):")
+    print("\nDirect Learning (5-fold CV):")
     print(f"  Train R²: {exp_results['r2_train_mean']:.4f} ± {exp_results['r2_train_std']:.4f}")
     print(f"  Val R²:   {exp_results['r2_val_mean']:.4f} ± {exp_results['r2_val_std']:.4f}")
 

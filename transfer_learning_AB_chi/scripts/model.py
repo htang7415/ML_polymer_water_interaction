@@ -7,7 +7,8 @@ Physical relation: χ(T) = A / T + B
 
 import torch
 import torch.nn as nn
-from typing import Optional
+from typing import Optional, Union, List
+import warnings
 
 
 class ChiModel(nn.Module):
@@ -25,7 +26,8 @@ class ChiModel(nn.Module):
     def __init__(
         self,
         input_dim: int,
-        hidden_dim: int = 128,
+        hidden_dim: Optional[Union[int, List[int]]] = None,
+        hidden_dims: Optional[List[int]] = None,
         n_layers: int = 3,
         dropout_rate: float = 0.2
     ):
@@ -34,33 +36,63 @@ class ChiModel(nn.Module):
 
         Args:
             input_dim: Dimension of input features
-            hidden_dim: Width of hidden layers
+            hidden_dim: Width of hidden layers (DEPRECATED: use hidden_dims instead).
+                       Can be int for uniform width or list for per-layer widths.
+            hidden_dims: List of widths for each hidden layer (PREFERRED).
+                        Length must equal n_layers.
             n_layers: Number of hidden layers
             dropout_rate: Dropout probability
         """
         super(ChiModel, self).__init__()
 
+        # Handle backward compatibility and parameter validation
+        if hidden_dims is None and hidden_dim is None:
+            raise ValueError("Must specify either hidden_dim or hidden_dims")
+
+        if hidden_dims is not None:
+            # New format: per-layer dimensions
+            if len(hidden_dims) != n_layers:
+                raise ValueError(
+                    f"hidden_dims length ({len(hidden_dims)}) must match n_layers ({n_layers})"
+                )
+            self.hidden_dims = hidden_dims
+        else:
+            # Legacy format: single dimension or list passed as hidden_dim
+            if isinstance(hidden_dim, list):
+                if len(hidden_dim) != n_layers:
+                    raise ValueError(
+                        f"hidden_dim list length ({len(hidden_dim)}) must match n_layers ({n_layers})"
+                    )
+                self.hidden_dims = hidden_dim
+            else:
+                # Single integer - replicate for all layers
+                self.hidden_dims = [hidden_dim] * n_layers
+                warnings.warn(
+                    "Passing scalar hidden_dim is deprecated. Use hidden_dims=[...] instead.",
+                    DeprecationWarning,
+                    stacklevel=2
+                )
+
         self.input_dim = input_dim
-        self.hidden_dim = hidden_dim
         self.n_layers = n_layers
         self.dropout_rate = dropout_rate
 
-        # Build layers
+        # Build layers with variable dimensions
         layers = []
 
-        # Input layer
-        layers.append(nn.Linear(input_dim, hidden_dim))
+        # Input layer: input_dim -> hidden_dims[0]
+        layers.append(nn.Linear(input_dim, self.hidden_dims[0]))
         layers.append(nn.ReLU())
         layers.append(nn.Dropout(dropout_rate))
 
-        # Hidden layers
-        for _ in range(n_layers - 1):
-            layers.append(nn.Linear(hidden_dim, hidden_dim))
+        # Hidden layers: hidden_dims[i-1] -> hidden_dims[i]
+        for i in range(1, n_layers):
+            layers.append(nn.Linear(self.hidden_dims[i-1], self.hidden_dims[i]))
             layers.append(nn.ReLU())
             layers.append(nn.Dropout(dropout_rate))
 
-        # Output layer: 2 outputs (A and B)
-        layers.append(nn.Linear(hidden_dim, 2))
+        # Output layer: hidden_dims[-1] -> 2
+        layers.append(nn.Linear(self.hidden_dims[-1], 2))
 
         self.network = nn.Sequential(*layers)
 
@@ -164,7 +196,8 @@ class ChiModel(nn.Module):
 
 def create_model(
     input_dim: int,
-    hidden_dim: int = 128,
+    hidden_dim: Optional[Union[int, List[int]]] = None,
+    hidden_dims: Optional[List[int]] = None,
     n_layers: int = 3,
     dropout_rate: float = 0.2,
     device: Optional[torch.device] = None
@@ -174,7 +207,8 @@ def create_model(
 
     Args:
         input_dim: Dimension of input features
-        hidden_dim: Width of hidden layers
+        hidden_dim: Width of hidden layers (DEPRECATED: use hidden_dims instead)
+        hidden_dims: List of widths for each hidden layer (PREFERRED)
         n_layers: Number of hidden layers
         dropout_rate: Dropout probability
         device: Device to place the model on (if None, uses CPU)
@@ -188,13 +222,17 @@ def create_model(
     model = ChiModel(
         input_dim=input_dim,
         hidden_dim=hidden_dim,
+        hidden_dims=hidden_dims,
         n_layers=n_layers,
         dropout_rate=dropout_rate
     )
 
     model = model.to(device)
 
-    print(f"Created model with {model.get_num_total_params():,} total parameters")
+    # Enhanced logging with architecture visualization
+    arch_str = f"input({input_dim}) → {model.hidden_dims} → output(2)"
+    print(f"Created model: {arch_str}")
+    print(f"Total parameters: {model.get_num_total_params():,}")
     print(f"Trainable parameters: {model.get_num_trainable_params():,}")
 
     return model

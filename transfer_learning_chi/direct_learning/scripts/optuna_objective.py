@@ -1,5 +1,5 @@
 """
-Optuna hyperparameter optimization for transfer learning.
+Optuna hyperparameter optimization for direct learning (without transfer learning).
 """
 
 import optuna
@@ -7,10 +7,18 @@ import yaml
 import os
 import torch
 from typing import Dict
+import sys
 
-from data_utils import get_dft_splits, get_exp_data, create_5fold_polymer_split
+# Import from parent folder - use absolute path
+script_dir = os.path.dirname(os.path.abspath(__file__))
+parent_scripts_dir = os.path.join(script_dir, '../../scripts')
+sys.path.insert(0, os.path.abspath(parent_scripts_dir))
+
+from data_utils import get_exp_data, create_5fold_polymer_split
 from features import FeatureBuilder
-from train import pretrain_on_dft, finetune_on_exp
+
+# Import from current folder
+from train_direct import train_on_exp_direct
 
 
 def load_config(config_path: str = '../config.yaml') -> Dict:
@@ -75,49 +83,23 @@ def sample_hyperparameters(trial: optuna.Trial, config: Dict) -> Dict:
         log=True
     )
 
-    # Pretraining hyperparameters
-    hyperparams['lr_pre'] = trial.suggest_float(
-        'lr_pre',
-        search_space['lr_pre']['low'],
-        search_space['lr_pre']['high'],
+    # Training hyperparameters
+    hyperparams['lr'] = trial.suggest_float(
+        'lr',
+        search_space['lr']['low'],
+        search_space['lr']['high'],
         log=True
     )
 
-    hyperparams['epochs_pre'] = trial.suggest_int(
-        'epochs_pre',
-        search_space['epochs_pre']['low'],
-        search_space['epochs_pre']['high']
+    hyperparams['epochs'] = trial.suggest_int(
+        'epochs',
+        search_space['epochs']['low'],
+        search_space['epochs']['high']
     )
 
-    hyperparams['batch_pre'] = trial.suggest_categorical(
-        'batch_pre',
-        search_space['batch_pre']['choices']
-    )
-
-    # Fine-tuning hyperparameters
-    hyperparams['lr_ft'] = trial.suggest_float(
-        'lr_ft',
-        search_space['lr_ft']['low'],
-        search_space['lr_ft']['high'],
-        log=True
-    )
-
-    hyperparams['epochs_ft'] = trial.suggest_int(
-        'epochs_ft',
-        search_space['epochs_ft']['low'],
-        search_space['epochs_ft']['high']
-    )
-
-    hyperparams['batch_ft'] = trial.suggest_categorical(
-        'batch_ft',
-        search_space['batch_ft']['choices']
-    )
-
-    # Number of layers to freeze (depends on n_layers)
-    hyperparams['n_freeze_layers'] = trial.suggest_int(
-        'n_freeze_layers',
-        0,
-        hyperparams['n_layers']
+    hyperparams['batch_size'] = trial.suggest_categorical(
+        'batch_size',
+        search_space['batch_size']['choices']
     )
 
     # Data split seed
@@ -132,7 +114,7 @@ def sample_hyperparameters(trial: optuna.Trial, config: Dict) -> Dict:
 
 def objective(trial: optuna.Trial) -> float:
     """
-    Optuna objective function.
+    Optuna objective function for direct learning.
 
     Args:
         trial: Optuna trial object
@@ -158,9 +140,6 @@ def objective(trial: optuna.Trial) -> float:
     print(f"Using device: {device}")
 
     try:
-        # Load and split DFT data
-        dft_train_df, dft_val_df, dft_test_df = get_dft_splits(config)
-
         # Load experimental data
         exp_df = get_exp_data(config)
 
@@ -168,28 +147,10 @@ def objective(trial: optuna.Trial) -> float:
         feature_builder = FeatureBuilder(config)
         feature_mode = hyperparams['feature_mode']
 
-        # Fit descriptor scaler on DFT train
-        feature_builder.fit_descriptor_scaler(dft_train_df)
-
-        # Build DFT features
-        X_dft_train, y_dft_train = feature_builder.build_features(dft_train_df, feature_mode)
-        X_dft_val, y_dft_val = feature_builder.build_features(dft_val_df, feature_mode)
-        X_dft_test, y_dft_test = feature_builder.build_features(dft_test_df, feature_mode)
-
-        # Pretrain on DFT
-        pretrained_model, dft_results = pretrain_on_dft(
-            X_dft_train, y_dft_train,
-            X_dft_val, y_dft_val,
-            X_dft_test, y_dft_test,
-            hyperparams,
-            config,
-            device
-        )
-
-        # Store DFT metrics
-        trial.set_user_attr('r2_dft_train', dft_results['train_metrics']['r2'])
-        trial.set_user_attr('r2_dft_val', dft_results['val_metrics']['r2'])
-        trial.set_user_attr('r2_dft_test', dft_results['test_metrics']['r2'])
+        # Fit descriptor scaler on all experimental data
+        # (Note: This could lead to data leakage, but with only ~40 samples,
+        #  we need to use all data for robust scaling. Alternative: fit on train fold only)
+        feature_builder.fit_descriptor_scaler(exp_df)
 
         # Create 5-fold split for experimental data
         exp_folds_df = create_5fold_polymer_split(exp_df, hyperparams['split_seed'])
@@ -201,9 +162,8 @@ def objective(trial: optuna.Trial) -> float:
             X_val, y_val = feature_builder.build_features(val_df, feature_mode)
             exp_folds_features.append((X_train, y_train, X_val, y_val))
 
-        # Fine-tune on experimental data
-        exp_results = finetune_on_exp(
-            pretrained_model,
+        # Train directly on experimental data
+        exp_results = train_on_exp_direct(
             exp_folds_features,
             hyperparams,
             config,
@@ -246,9 +206,6 @@ def save_trial_to_file(study: optuna.Study, trial: optuna.Trial, output_dir: str
 
     # Filter metrics to only include summary metrics (not per-fold)
     summary_metrics = {
-        'r2_dft_train': trial.user_attrs.get('r2_dft_train'),
-        'r2_dft_val': trial.user_attrs.get('r2_dft_val'),
-        'r2_dft_test': trial.user_attrs.get('r2_dft_test'),
         'r2_cv_train_mean': trial.user_attrs.get('r2_cv_train_mean'),
         'r2_cv_val_mean': trial.user_attrs.get('r2_cv_val_mean'),
     }
@@ -312,7 +269,7 @@ def save_best_trial(study: optuna.Study, output_dir: str):
     best_file = os.path.join(output_dir, 'best_hyperparameters.txt')
 
     with open(best_file, 'w') as f:
-        f.write("Best Hyperparameters\n")
+        f.write("Best Hyperparameters (Direct Learning)\n")
         f.write(f"{'=' * 60}\n")
         f.write(f"Best Trial Number: {best_trial.number}\n")
         f.write(f"Best Objective (Mean CV Val R²): {best_trial.value:.6f}\n\n")
@@ -330,7 +287,7 @@ def save_best_trial(study: optuna.Study, output_dir: str):
 
 def main():
     """
-    Run Optuna hyperparameter optimization.
+    Run Optuna hyperparameter optimization for direct learning.
     """
     # Load config
     config = load_config()

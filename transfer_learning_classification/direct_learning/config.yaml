@@ -1,0 +1,131 @@
+# Configuration file for Direct Learning: Binary Solubility Classification (No Transfer Learning)
+#
+# This configuration is for training a classification model from scratch without pretraining.
+# Compare results with transfer learning approach in parent directory.
+
+# =============================================================================
+# Data paths
+# =============================================================================
+data:
+  binary_solubility_csv: "../Data/Binary_solubility.csv"
+  binary_features_csv: "../Data/binary_features.csv"
+
+# =============================================================================
+# Feature engineering
+# =============================================================================
+features:
+  morgan_fingerprint:
+    radius: 3
+    n_bits: 1024
+  descriptors:
+    use_all_rdkit: true  # Use all valid RDKit descriptors
+  feature_mode: "fp_desc"  # Options: "fp", "desc", "fp_desc"
+
+# =============================================================================
+# Model architecture (default values)
+# =============================================================================
+model:
+  hidden_dims: [256, 128, 64]  # Hidden layer dimensions (each layer can be different)
+  dropout_rate: 0.2  # Dropout probability
+  activation: "relu"  # Activation function
+
+# =============================================================================
+# Training settings (default values)
+# =============================================================================
+training:
+  # Direct learning (train from scratch, no pretraining)
+  direct:
+    epochs: 500
+    batch_size: 2
+    learning_rate: 0.0001
+    weight_decay: 0.0001
+    optimizer: "adamw"
+    loss: "bce"
+
+  # Data splitting
+  split:
+    cv_folds: 5
+    seed: 42
+
+# =============================================================================
+# MC Dropout settings
+# =============================================================================
+mc_dropout:
+  n_samples: 100  # Number of forward passes for uncertainty estimation
+  enabled: true
+
+# =============================================================================
+# Optuna hyperparameter optimization
+# =============================================================================
+optuna:
+  study_name: "direct_learning_solubility"
+  n_trials: 1000
+  direction: "maximize"  # Maximize validation F1 score
+  storage: null  # Use in-memory storage (or specify SQLite path)
+
+  # Hyperparameter search space
+  search_space:
+    # Feature mode
+    feature_mode:
+      type: "categorical"
+      choices: ["fp", "desc", "fp_desc"]
+
+    # Model architecture
+    n_layers:
+      type: "int"
+      low: 2
+      high: 7
+    # Note: hidden_dim per layer is sampled independently in code
+    # Each layer can be 64, 128, 256, or 512
+
+    dropout_rate:
+      type: "float"
+      low: 0.1
+      high: 0.5
+
+    # Direct learning hyperparameters
+    lr:
+      type: "loguniform"
+      low: 1.0e-5
+      high: 1.0e-3
+
+    epochs:
+      type: "int"
+      low: 500
+      high: 1000
+
+    batch_size:
+      type: "categorical"
+      choices: [2, 4, 8, 16, 32, 64]
+
+    weight_decay:
+      type: "loguniform"
+      low: 1.0e-5
+      high: 1.0e-3
+
+    # Random seed for data splitting
+    split_seed:
+      type: "int"
+      low: 1
+      high: 999
+
+# =============================================================================
+# Output directories
+# =============================================================================
+outputs:
+  base_dir: "outputs"
+  hyperopt_dir: "hyperparameter_optimization"
+
+# =============================================================================
+# Plotting settings
+# =============================================================================
+plotting:
+  figure_size: [4.5, 4.5]  # Default figure size in inches
+  font_size: 12
+  dpi: 600
+  format: "png"
+
+# =============================================================================
+# Reproducibility
+# =============================================================================
+random_seed: 42

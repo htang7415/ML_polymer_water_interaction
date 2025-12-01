@@ -1,12 +1,9 @@
-# Configuration for Polymer-Water χ Transfer Learning
+# Configuration for Polymer-Water χ Direct Learning (No Transfer Learning)
 
 # Data paths
 data:
-  dft_raw: "Data/OMG_DFT_COSMOC_chi.csv"
-  exp_raw: "Data/Experiment_chi_data.csv"
-  dft_features: "DFT_features.csv"
+  exp_raw: "../Data/Experiment_chi_data.csv"
   exp_features: "EXP_features.csv"
-  
 
 # Feature settings
 features:
@@ -18,16 +15,12 @@ features:
 
 # Global settings
 global:
-  dft_split_seed: 42  # Fixed seed for DFT train/val/test split
-  dft_train_frac: 0.8
-  dft_val_frac: 0.1
-  dft_test_frac: 0.1
   n_folds: 5  # For experimental CV
   mc_dropout_samples: 100  # Number of MC dropout samples for uncertainty
 
 # Optuna settings
 optuna:
-  study_name: "polymer_chi_transfer_learning"
+  study_name: "polymer_chi_direct_learning"
   n_trials: 1000
   direction: "maximize"  # Maximize mean validation R²
   storage: "sqlite:///hyperparameter_optimization/optuna_study.db"
@@ -45,7 +38,7 @@ hyperparameters:
     low: 2
     high: 7
 
-  # Per-layer dimension sampling (NEW)
+  # Per-layer dimension sampling
   hidden_dim_per_layer:
     type: "categorical"
     choices: [32, 64, 128, 256, 512]
@@ -62,42 +55,20 @@ hyperparameters:
     low: 1.0e-6
     high: 1.0e-3
 
-  # Pretraining on DFT
-  lr_pre:
-    type: "loguniform"
-    low: 1.0e-5
-    high: 1.0e-2
-
-  epochs_pre:
-    type: "int"
-    low: 60
-    high: 60
-
-  batch_pre:
-    type: "categorical"
-    choices: [128, 256]
-
-  # Fine-tuning on experimental
-  lr_ft:
+  # Training on experimental data (direct learning, no pretraining)
+  lr:
     type: "loguniform"
     low: 1.0e-6
-    high: 1.0e-3
+    high: 1.0e-2
 
-  epochs_ft:
+  epochs:
     type: "int"
-    low: 1000
-    high: 1000
+    low: 500
+    high: 2000
 
-  batch_ft:
+  batch_size:
     type: "categorical"
     choices: [1, 2, 4, 8, 16, 32]
-
-  # Number of layers to freeze from input side (0 to n_layers)
-  # 0 = all trainable, n_layers = freeze all hidden layers (only output trainable)
-  n_freeze_layers:
-    type: "int"
-    low: 0
-    high: 7  # Should match or exceed n_layers high value
 
   # Data split seed for experimental 5-fold CV
   split_seed:
@@ -112,13 +83,9 @@ defaults:
   hidden_dims: [256, 128, 64]  # Decreasing funnel architecture
   dropout_rate: 0.2
   weight_decay: 1.0e-4
-  lr_pre: 1.0e-3
-  epochs_pre: 150
-  batch_pre: 128
-  lr_ft: 1.0e-4
-  epochs_ft: 150
-  batch_ft: 16
-  n_freeze_layers: 0  # All trainable by default
+  lr: 1.0e-3
+  epochs: 1000
+  batch_size: 16
   split_seed: 42
 
 # Output settings
