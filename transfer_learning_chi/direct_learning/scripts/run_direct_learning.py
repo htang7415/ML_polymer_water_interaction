@@ -17,6 +17,8 @@ from data_utils import get_exp_data, create_5fold_polymer_split
 from features import FeatureBuilder
 from plotting import (
     setup_plot_style,
+    plot_training_curves,
+    plot_training_curves_folds,
     plot_parity_folds,
     plot_calibration_folds
 )
@@ -160,6 +162,8 @@ def save_metrics(exp_results, output_dir):
             'fold': fold_data['fold'],
             'train': fold_data['train_metrics'],
             'val': fold_data['val_metrics'],
+            'train_losses': fold_data['train_losses'],
+            'val_losses': fold_data['val_losses'],
         })
 
     metrics_file = os.path.join(output_dir, 'metrics.json')
@@ -184,6 +188,22 @@ def generate_all_plots(exp_results, config, output_dir):
     os.makedirs(plots_dir, exist_ok=True)
 
     print("\nGenerating plots...")
+
+    # Training curves - individual folds
+    for fold_idx, fold_data in enumerate(exp_results['fold_results']):
+        plot_training_curves(
+            fold_data['train_losses'],
+            fold_data['val_losses'],
+            os.path.join(plots_dir, f'direct_fold_{fold_idx + 1}_training_curves.png'),
+            config
+        )
+
+    # Training curves - all folds combined
+    plot_training_curves_folds(
+        exp_results['fold_results'],
+        os.path.join(plots_dir, 'direct_all_folds_training_curves.png'),
+        config
+    )
 
     # Experimental fold parity plots
     plot_parity_folds(

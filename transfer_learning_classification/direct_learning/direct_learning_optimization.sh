@@ -11,7 +11,11 @@
 # 3. Saves best parameters to hyperparameter_optimization/best_hyperparameters.txt
 #
 # Prerequisites:
-# - Run ../MF_descriptors.sh first to precompute features
+# - Run MF_descriptors.sh first to precompute features
+#
+# Usage:
+#   bash direct_learning/direct_learning_optimization.sh    (from transfer_learning_classification/)
+#   bash direct_learning_optimization.sh                    (from direct_learning/)
 #
 # Note: This optimization can take many hours depending on n_trials in config.yaml
 ################################################################################
@@ -20,6 +24,12 @@ echo "==========================================================================
 echo "HYPERPARAMETER OPTIMIZATION WITH OPTUNA (DIRECT LEARNING)"
 echo "================================================================================"
 echo ""
+
+# Get the directory where this script is located
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+
+# Change to the script directory
+cd "$SCRIPT_DIR"
 
 # Check if precomputed features exist
 if [ ! -f "../Data/binary_features.csv" ]; then

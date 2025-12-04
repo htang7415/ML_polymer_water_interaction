@@ -49,6 +49,110 @@ def plot_training_curves(
     print(f"Saved training curves to {save_path}")
 
 
+def plot_training_curves_folds(
+    fold_histories: List[Dict[str, List[float]]],
+    save_path: str,
+    title_prefix: str = "Training Curves"
+):
+    """
+    Plot training and validation loss curves for all CV folds with 2 side-by-side subplots.
+    Left subplot: Training Loss (All Folds), Right subplot: Validation Loss (All Folds).
+
+    Args:
+        fold_histories: List of history dictionaries, one per fold
+        save_path: Path to save the plot
+        title_prefix: Prefix for plot titles
+    """
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(9, 4.5))
+
+    # Get colormap for fold colors
+    n_folds = len(fold_histories)
+    colors = plt.cm.tab10(np.linspace(0, 1, n_folds))
+
+    # Plot each fold
+    for fold_idx, history in enumerate(fold_histories):
+        epochs = range(1, len(history['train_loss']) + 1)
+        color = colors[fold_idx]
+
+        # Left subplot: Training Loss
+        ax1.plot(
+            epochs,
+            history['train_loss'],
+            color=color,
+            linewidth=1.5,
+            label=f'Fold {fold_idx + 1}'
+        )
+
+        # Right subplot: Validation Loss
+        ax2.plot(
+            epochs,
+            history['val_loss'],
+            color=color,
+            linewidth=1.5,
+            label=f'Fold {fold_idx + 1}'
+        )
+
+    # Configure left subplot (Training Loss)
+    ax1.set_xlabel('Epoch')
+    ax1.set_ylabel('MSE Loss')
+    ax1.set_title(f'Training Loss (All Folds)')
+    ax1.legend(loc='best')
+    ax1.grid(True, alpha=0.3)
+
+    # Configure right subplot (Validation Loss)
+    ax2.set_xlabel('Epoch')
+    ax2.set_ylabel('MSE Loss')
+    ax2.set_title(f'Validation Loss (All Folds)')
+    ax2.legend(loc='best')
+    ax2.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    plt.close()
+
+    print(f"Saved combined fold training curves to {save_path}")
+
+
+def plot_individual_fold_curves(
+    fold_histories: List[Dict[str, List[float]]],
+    output_dir: str,
+    prefix: str = "fold"
+):
+    """
+    Plot individual training curves for each fold (separate files).
+
+    Args:
+        fold_histories: List of history dictionaries, one per fold
+        output_dir: Directory to save the plots
+        prefix: Prefix for output filenames
+    """
+    os.makedirs(output_dir, exist_ok=True)
+
+    for fold_idx, history in enumerate(fold_histories):
+        fig, ax = plt.subplots(figsize=(4.5, 4.5))
+
+        epochs = range(1, len(history['train_loss']) + 1)
+
+        # Plot train and validation loss
+        ax.plot(epochs, history['train_loss'], 'b-', label='Train', linewidth=1.5)
+        ax.plot(epochs, history['val_loss'], 'r-', label='Val', linewidth=1.5)
+
+        ax.set_xlabel('Epoch')
+        ax.set_ylabel('MSE Loss')
+        ax.set_title(f'Fold {fold_idx + 1}')
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+
+        plt.tight_layout()
+
+        # Save individual fold plot
+        save_path = os.path.join(output_dir, f'{prefix}_{fold_idx}_curves.png')
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        plt.close()
+
+        print(f"Saved fold {fold_idx} training curves to {save_path}")
+
+
 def plot_parity(
     y_true: np.ndarray,
     y_pred: np.ndarray,

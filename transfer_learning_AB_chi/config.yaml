@@ -43,7 +43,7 @@ hyperparameters:
   n_layers:
     type: "int"
     low: 2
-    high: 7
+    high: 5
 
   # Per-layer dimension sampling (NEW)
   hidden_dim_per_layer:
@@ -65,7 +65,7 @@ hyperparameters:
   # Pretraining on DFT
   lr_pre:
     type: "loguniform"
-    low: 1.0e-5
+    low: 1.0e-4
     high: 1.0e-2
 
   epochs_pre:
@@ -75,13 +75,13 @@ hyperparameters:
 
   batch_pre:
     type: "categorical"
-    choices: [128, 256]
+    choices: [256]
 
   # Fine-tuning on experimental
   lr_ft:
     type: "loguniform"
     low: 1.0e-6
-    high: 1.0e-3
+    high: 1.0e-4
 
   epochs_ft:
     type: "int"
@@ -97,13 +97,13 @@ hyperparameters:
   n_freeze_layers:
     type: "int"
     low: 0
-    high: 7  # Should match or exceed n_layers high value
+    high: 5  # Should match or exceed n_layers high value
 
   # Data split seed for experimental 5-fold CV
   split_seed:
     type: "int"
     low: 0
-    high: 999
+    high: 100
 
 # Default hyperparameters (used if no Optuna best params found)
 defaults:

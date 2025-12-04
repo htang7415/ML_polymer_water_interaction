@@ -54,7 +54,7 @@ ls -lh EXP_features.csv
 Run Optuna to find the best hyperparameters for direct learning:
 
 ```bash
-bash hyperparameter_optimization.sh
+bash hyperparameter_optimization_direct.sh
 ```
 
 This will:
@@ -70,7 +70,7 @@ This will:
 Run the final training with optimized hyperparameters:
 
 ```bash
-bash direct_learning.sh
+bash run_direct_learning.sh
 ```
 
 This will:

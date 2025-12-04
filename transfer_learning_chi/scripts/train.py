@@ -41,7 +41,7 @@ def train_epoch(
         y_batch = y_batch.to(device)
 
         optimizer.zero_grad()
-        y_pred = model(X_batch).squeeze()
+        y_pred = model(X_batch).squeeze(-1)
         loss = criterion(y_pred, y_batch)
         loss.backward()
         optimizer.step()
@@ -79,7 +79,7 @@ def eval_epoch(
             X_batch = X_batch.to(device)
             y_batch = y_batch.to(device)
 
-            y_pred = model(X_batch).squeeze()
+            y_pred = model(X_batch).squeeze(-1)
             loss = criterion(y_pred, y_batch)
 
             total_loss += loss.item()
@@ -250,6 +250,10 @@ def finetune_on_exp(
 
             train_losses.append(train_loss)
             val_losses.append(val_loss)
+
+            # Print progress every 50 epochs
+            if (epoch + 1) % 50 == 0 or epoch == 0:
+                print(f"    Epoch {epoch + 1}/{epochs}: train_loss={train_loss:.6f}, val_loss={val_loss:.6f}")
 
         # Evaluate with MC Dropout
         mu_train, sigma_train, metrics_train = evaluate_mc_dropout(model, X_train, y_train, n_mc_samples, device)

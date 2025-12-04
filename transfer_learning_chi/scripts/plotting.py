@@ -47,6 +47,50 @@ def plot_training_curves(train_losses: List[float], val_losses: List[float], sav
     print(f"Saved training curves to {save_path}")
 
 
+def plot_training_curves_folds(fold_results: List[Dict], save_path: str, config: Dict):
+    """
+    Plot training curves for all CV folds on a single figure.
+
+    Args:
+        fold_results: List of fold result dictionaries containing train_losses and val_losses
+        save_path: Path to save figure
+        config: Configuration dictionary
+    """
+    figsize = tuple(config['plotting']['figure_size'])
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(figsize[0] * 2, figsize[1]))
+
+    colors = ['C0', 'C1', 'C2', 'C3', 'C4']
+
+    # Plot training losses
+    for fold_idx, fold_data in enumerate(fold_results):
+        epochs = np.arange(1, len(fold_data['train_losses']) + 1)
+        ax1.plot(epochs, fold_data['train_losses'], color=colors[fold_idx],
+                linewidth=1.5, alpha=0.7, label=f'Fold {fold_idx + 1}')
+
+    ax1.set_xlabel('Epoch')
+    ax1.set_ylabel('MSE Loss')
+    ax1.set_title('Training Loss (All Folds)')
+    ax1.legend(fontsize=8)
+    ax1.grid(True, alpha=0.3)
+
+    # Plot validation losses
+    for fold_idx, fold_data in enumerate(fold_results):
+        epochs = np.arange(1, len(fold_data['val_losses']) + 1)
+        ax2.plot(epochs, fold_data['val_losses'], color=colors[fold_idx],
+                linewidth=1.5, alpha=0.7, label=f'Fold {fold_idx + 1}')
+
+    ax2.set_xlabel('Epoch')
+    ax2.set_ylabel('MSE Loss')
+    ax2.set_title('Validation Loss (All Folds)')
+    ax2.legend(fontsize=8)
+    ax2.grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    plt.savefig(save_path)
+    plt.close()
+    print(f"Saved fold training curves to {save_path}")
+
+
 def plot_parity(
     y_true: np.ndarray,
     y_pred: np.ndarray,

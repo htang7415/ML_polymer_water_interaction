@@ -161,6 +161,10 @@ def train_on_exp_direct(
             train_losses.append(train_loss)
             val_losses.append(val_loss)
 
+            # Print progress every 50 epochs
+            if (epoch + 1) % 50 == 0 or epoch == 0:
+                print(f"    Epoch {epoch + 1}/{epochs}: train_loss={train_loss:.6f}, val_loss={val_loss:.6f}")
+
         # Evaluate with MC Dropout
         mu_train, sigma_train, metrics_train = evaluate_mc_dropout(model, X_train, y_train, n_mc_samples, device)
         mu_val, sigma_val, metrics_val = evaluate_mc_dropout(model, X_val, y_val, n_mc_samples, device)

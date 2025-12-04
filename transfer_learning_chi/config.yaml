@@ -61,7 +61,7 @@ optuna:
     n_layers:
       type: "int"
       low: 2
-      high: 7
+      high: 5
 
     hidden_dims_per_layer:
       type: "categorical"
@@ -91,13 +91,13 @@ optuna:
 
     batch_pre:
       type: "categorical"
-      choices: [128, 256]
+      choices: [256]
 
     # Fine-tuning hyperparameters
     lr_ft:
       type: "loguniform"
-      low: 1.0e-5
-      high: 1.0e-3
+      low: 1.0e-6
+      high: 1.0e-4
 
     epochs_ft:
       type: "int"
@@ -115,7 +115,7 @@ optuna:
     split_seed:
       type: "int"
       low: 0
-      high: 999
+      high: 100
 
 # Output directories
 outputs:

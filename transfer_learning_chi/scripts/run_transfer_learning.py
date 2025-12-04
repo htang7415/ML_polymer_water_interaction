@@ -14,6 +14,7 @@ from train import pretrain_on_dft, finetune_on_exp
 from plotting import (
     setup_plot_style,
     plot_training_curves,
+    plot_training_curves_folds,
     plot_parity,
     plot_parity_folds,
     plot_calibration,
@@ -151,6 +152,8 @@ def save_metrics(dft_results, exp_results, output_dir):
             'train': dft_results['train_metrics'],
             'val': dft_results['val_metrics'],
             'test': dft_results['test_metrics'],
+            'train_losses': dft_results['train_losses'],
+            'val_losses': dft_results['val_losses'],
         },
         'experimental': {
             'r2_val_mean': exp_results['r2_val_mean'],
@@ -166,6 +169,8 @@ def save_metrics(dft_results, exp_results, output_dir):
             'fold': fold_data['fold'],
             'train': fold_data['train_metrics'],
             'val': fold_data['val_metrics'],
+            'train_losses': fold_data['train_losses'],
+            'val_losses': fold_data['val_losses'],
         })
 
     metrics_file = os.path.join(output_dir, 'metrics.json')
@@ -198,6 +203,22 @@ def generate_all_plots(dft_results, exp_results, y_dft_train, y_dft_val, y_dft_t
         dft_results['train_losses'],
         dft_results['val_losses'],
         os.path.join(plots_dir, 'dft_training_curves.png'),
+        config
+    )
+
+    # Experimental training curves - individual folds
+    for fold_idx, fold_data in enumerate(exp_results['fold_results']):
+        plot_training_curves(
+            fold_data['train_losses'],
+            fold_data['val_losses'],
+            os.path.join(plots_dir, f'exp_fold_{fold_idx + 1}_training_curves.png'),
+            config
+        )
+
+    # Experimental training curves - all folds combined
+    plot_training_curves_folds(
+        exp_results['fold_results'],
+        os.path.join(plots_dir, 'exp_all_folds_training_curves.png'),
         config
     )
 

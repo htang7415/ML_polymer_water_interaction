@@ -23,7 +23,7 @@ from data_utils import load_features, get_dft_splits, get_experiment_folds
 from features import filter_and_scale_descriptors, build_features, validate_features
 from model import create_model
 from train import ChiLoss, train_model, create_dataloader, evaluate_mc_dropout, get_device
-from plotting import plot_dft_results, plot_cv_results, plot_training_curves, plot_parity_multicolor
+from plotting import plot_dft_results, plot_cv_results, plot_training_curves, plot_parity_multicolor, plot_training_curves_folds, plot_individual_fold_curves
 
 
 def load_best_hyperparameters(best_params_file: str, config: Dict[str, Any]) -> Dict[str, Any]:
@@ -53,8 +53,12 @@ def load_best_hyperparameters(best_params_file: str, config: Dict[str, Any]) -> 
                     continue
 
                 if in_params:
-                    if line.startswith("Performance:") or line == "":
+                    if line.startswith("Performance:"):
                         break
+
+                    # Skip empty lines
+                    if line == "":
+                        continue
 
                     # Skip comment lines
                     if line.startswith('#'):
@@ -536,6 +540,20 @@ def main():
         fold_metrics=fold_metrics,
         output_dir=config['outputs']['plots_dir'],
         prefix='exp'
+    )
+
+    # Plot fine-tuning curves - combined view (2 subplots)
+    plot_training_curves_folds(
+        fold_histories=fold_histories,
+        save_path=os.path.join(config['outputs']['plots_dir'], 'exp_finetuning_curves_combined.png'),
+        title_prefix='Fine-tuning'
+    )
+
+    # Plot fine-tuning curves - individual folds
+    plot_individual_fold_curves(
+        fold_histories=fold_histories,
+        output_dir=config['outputs']['plots_dir'],
+        prefix='exp_finetuning_fold'
     )
 
     # Plot experimental CV results (training)

@@ -49,30 +49,35 @@ direct_learning/
 
 ## Usage
 
+**Note:** Run scripts from the parent `transfer_learning_classification/` directory:
+
 ### Option 1: Train with default hyperparameters
 
 ```bash
-bash direct_learning.sh
+# From transfer_learning_classification/ directory
+bash direct_learning/direct_learning.sh
 ```
 
 This will:
 - Train a classification model from scratch using 5-fold cross-validation
 - Generate all metrics and plots
-- Save results to `outputs/`
+- Save results to `direct_learning/outputs/`
 
 ### Option 2: Optimize hyperparameters first (recommended)
 
 ```bash
+# From transfer_learning_classification/ directory
+
 # Run Optuna optimization (may take 12-24 hours)
-bash direct_learning_optimization.sh
+bash direct_learning/direct_learning_optimization.sh
 
 # Review best hyperparameters
-cat hyperparameter_optimization/best_hyperparameters.txt
+cat direct_learning/hyperparameter_optimization/best_hyperparameters.txt
 
-# Update config.yaml with best parameters (optional)
+# Update direct_learning/config.yaml with best parameters (optional)
 
 # Run training with optimized parameters
-bash direct_learning.sh
+bash direct_learning/direct_learning.sh
 ```
 
 ## Configuration
@@ -104,11 +109,13 @@ After training, `outputs/` will contain:
 After running both approaches, compare results:
 
 ```bash
+# From transfer_learning_classification/ directory
+
 # Transfer learning results
-cat ../outputs/classification/metrics.json
+cat outputs/classification/metrics.json
 
 # Direct learning results
-cat outputs/metrics.json
+cat direct_learning/outputs/metrics.json
 ```
 
 **Key metrics to compare:**

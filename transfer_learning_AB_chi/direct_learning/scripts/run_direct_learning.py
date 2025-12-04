@@ -25,7 +25,7 @@ from data_utils import load_features, get_experiment_folds
 from features import filter_and_scale_descriptors, build_features, validate_features
 from model import create_model
 from train import ChiLoss, train_model, create_dataloader, evaluate_mc_dropout, get_device
-from plotting import plot_cv_results, plot_parity_multicolor
+from plotting import plot_cv_results, plot_parity_multicolor, plot_training_curves_folds, plot_individual_fold_curves
 
 
 def load_best_hyperparameters(best_params_file: str, config: Dict[str, Any]) -> Dict[str, Any]:
@@ -55,8 +55,12 @@ def load_best_hyperparameters(best_params_file: str, config: Dict[str, Any]) -> 
                     continue
 
                 if in_params:
-                    if line.startswith("Performance:") or line == "":
+                    if line.startswith("Performance:"):
                         break
+
+                    # Skip empty lines
+                    if line == "":
+                        continue
 
                     # Skip comment lines
                     if line.startswith('#'):
@@ -93,6 +97,13 @@ def load_best_hyperparameters(best_params_file: str, config: Dict[str, Any]) -> 
             print(f"Converted hidden_dim to hidden_dims: {hp['hidden_dims']}")
 
         print(f"Loaded hyperparameters: {hp}")
+
+        # Ensure critical parameters have defaults
+        if 'split_seed' not in hp:
+            default_split_seed = config['defaults']['split_seed']
+            hp['split_seed'] = default_split_seed
+            print(f"Warning: split_seed not found in hyperparameters, using default: {default_split_seed}")
+
         return hp
 
     else:
@@ -404,6 +415,20 @@ def main():
         fold_metrics=fold_metrics,
         output_dir=config['outputs']['plots_dir'],
         prefix='exp'
+    )
+
+    # Plot training curves - combined view (2 subplots)
+    plot_training_curves_folds(
+        fold_histories=fold_histories,
+        save_path=os.path.join(config['outputs']['plots_dir'], 'exp_training_curves_combined.png'),
+        title_prefix='Training'
+    )
+
+    # Plot training curves - individual folds
+    plot_individual_fold_curves(
+        fold_histories=fold_histories,
+        output_dir=config['outputs']['plots_dir'],
+        prefix='exp_training_fold'
     )
 
     # Plot experimental CV results (training)
