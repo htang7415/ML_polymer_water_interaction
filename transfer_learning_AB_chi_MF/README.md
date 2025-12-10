@@ -2,6 +2,10 @@
 
 A transfer learning framework for predicting polymer-water Flory-Huggins parameter (χ) as a function of temperature using a physically motivated neural network model.
 
+## Problem of this method
+
+When T is a constant in chi = A/T +B, model cannot have a good A and B. Because it is like chi = A + B, so A increase, B decrease, can meet the training goal. No physical meaning here. 
+
 ## Overview
 
 This project implements a transfer learning pipeline that:
