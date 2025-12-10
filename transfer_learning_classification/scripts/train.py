@@ -12,6 +12,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import TensorDataset, DataLoader
 from sklearn.model_selection import StratifiedKFold
+from sklearn.metrics import confusion_matrix
 
 from data_utils import (
     load_precomputed_features, split_dft_data,
